@@ -120,8 +120,8 @@ export class BrowserManager {
     compact?: boolean;
     selector?: string;
   }): Promise<EnhancedSnapshot> {
-    const page = this.getPage();
-    const snapshot = await getEnhancedSnapshot(page, options);
+    const frame = this.getFrame();
+    const snapshot = await getEnhancedSnapshot(frame, options);
     this.refMap = snapshot.refs;
     this.lastSnapshot = snapshot.tree;
     return snapshot;
@@ -145,21 +145,21 @@ export class BrowserManager {
     const refData = this.refMap[ref];
     if (!refData) return null;
 
-    const page = this.getPage();
+    const frame = this.getFrame();
 
     // Check if this is a cursor-interactive element (uses CSS selector, not ARIA role)
     // These have pseudo-roles 'clickable' or 'focusable' and a CSS selector
     if (refData.role === 'clickable' || refData.role === 'focusable') {
       // The selector is a CSS selector, use it directly
-      return page.locator(refData.selector);
+      return frame.locator(refData.selector);
     }
 
     // Build locator with exact: true to avoid substring matches
     let locator: Locator;
     if (refData.name) {
-      locator = page.getByRole(refData.role as any, { name: refData.name, exact: true });
+      locator = frame.getByRole(refData.role as any, { name: refData.name, exact: true });
     } else {
-      locator = page.getByRole(refData.role as any);
+      locator = frame.getByRole(refData.role as any);
     }
 
     // If an nth index is stored (for disambiguation), use it
@@ -186,8 +186,8 @@ export class BrowserManager {
     if (locator) return locator;
 
     // Otherwise treat as regular selector
-    const page = this.getPage();
-    return page.locator(selectorOrRef);
+    const frame = this.getFrame();
+    return frame.locator(selectorOrRef);
   }
 
   /**
@@ -217,7 +217,7 @@ export class BrowserManager {
     const page = this.getPage();
 
     if (options.selector) {
-      const frameElement = await page.$(options.selector);
+      const frameElement = await this.getFrame().$(options.selector);
       if (!frameElement) {
         throw new Error(`Frame not found: ${options.selector}`);
       }
@@ -239,6 +239,42 @@ export class BrowserManager {
       }
       this.activeFrame = frame;
     }
+  }
+
+  /**
+   * Switch to the first visible iframe in the current frame context.
+   * This powers the CLI shortcut: `frame sub`.
+   */
+  async switchToSubFrame(): Promise<void> {
+    const currentFrame = this.getFrame();
+    const frameElements = await currentFrame.$$('iframe, frame');
+
+    for (const frameElement of frameElements) {
+      const isVisible = await frameElement.evaluate((el: any) => {
+        if (!el || el.nodeType !== 1) return false;
+        const view = el.ownerDocument?.defaultView;
+        if (!view) return false;
+        const style = view.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return (
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          style.opacity !== '0' &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      });
+
+      if (!isVisible) continue;
+
+      const frame = await frameElement.contentFrame();
+      if (frame) {
+        this.activeFrame = frame;
+        return;
+      }
+    }
+
+    throw new Error('Visible subframe not found');
   }
 
   /**

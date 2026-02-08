@@ -525,6 +525,56 @@ The `--allow-file-access` flag adds Chromium flags (`--allow-file-access-from-fi
 
 **Note:** This flag only works with Chromium. For security, it's disabled by default.
 
+## Iframe Handling
+
+Switch into iframes to interact with their content. After switching, all commands (click, fill, snapshot, eval, etc.) operate inside the iframe.
+
+```bash
+# Switch into an iframe by CSS selector
+agent-browser frame "#my-iframe"
+agent-browser frame "iframe[name='editor']"
+
+# All subsequent commands target the iframe content
+agent-browser snapshot -i              # Accessibility tree of the iframe
+agent-browser click @e2                # Click element inside iframe
+agent-browser fill @e3 "text"          # Fill input inside iframe
+agent-browser eval "document.title"    # Returns the iframe's document title
+
+# Switch back to the main page
+agent-browser frame main
+```
+
+### Nested Iframes
+
+Frames can be nested. Each `frame` command searches from the current frame, so you can drill into nested iframes:
+
+```bash
+agent-browser frame "#outer-iframe"    # Enter outer iframe
+agent-browser frame "#inner-iframe"    # Enter inner iframe (inside outer)
+agent-browser snapshot                 # Shows inner iframe content
+agent-browser frame main               # Back to main page
+```
+
+### What Scopes to the Frame
+
+After `frame <selector>`, these commands operate inside the iframe:
+
+- **Element interaction**: `click`, `fill`, `type`, `hover`, `check`, `select`, `drag`, `tap`, etc.
+- **Snapshots**: `snapshot` returns the iframe's accessibility tree
+- **Queries**: `get text`, `get html`, `get count`, `find role`, `find text`, etc.
+- **JavaScript**: `eval` and `wait --fn` execute inside the iframe context
+- **Waiting**: `wait <selector>` waits for elements inside the iframe
+- **Scrolling**: `scroll` scrolls within the iframe
+
+These commands always operate at the page level (unaffected by frame selection):
+
+- **Navigation**: `open`, `back`, `forward`, `reload`
+- **Screenshots**: `screenshot` captures the full page viewport
+- **Tabs**: `tab new`, `tab close`, `tab <n>`
+- **Cookies/storage**: `cookies`, `storage`
+- **Keyboard**: `press`, `keydown`, `keyup` (input goes to the focused element regardless of frame)
+- **Mouse coordinates**: `mouse move`, `mouse down`, `mouse up`
+
 ## CDP Mode
 
 Connect to an existing browser via Chrome DevTools Protocol:

@@ -1834,6 +1834,13 @@ mod tests {
         assert_eq!(cmd["action"], "mainframe");
     }
 
+    #[test]
+    fn test_frame_sub() {
+        let cmd = parse_command(&args("frame sub"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "frame");
+        assert_eq!(cmd["selector"], "sub");
+    }
+
     // === Tabs ===
 
     #[test]

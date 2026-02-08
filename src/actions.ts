@@ -532,11 +532,10 @@ async function handleType(command: TypeCommand, browser: BrowserManager): Promis
 }
 
 async function handlePress(command: PressCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
-
   if (command.selector) {
-    await page.press(command.selector, command.key);
+    await browser.getLocator(command.selector).press(command.key);
   } else {
+    const page = browser.getPage();
     await page.keyboard.press(command.key);
   }
 
@@ -621,37 +620,37 @@ async function handleEvaluate(
   command: EvaluateCommand,
   browser: BrowserManager
 ): Promise<Response<EvaluateData>> {
-  const page = browser.getPage();
+  const frame = browser.getFrame();
 
   // Evaluate the script directly as a string expression
-  const result = await page.evaluate(command.script);
+  const result = await frame.evaluate(command.script);
 
   return successResponse(command.id, { result });
 }
 
 async function handleWait(command: WaitCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
+  const frame = browser.getFrame();
 
   if (command.selector) {
-    await page.waitForSelector(command.selector, {
+    await frame.waitForSelector(command.selector, {
       state: command.state ?? 'visible',
       timeout: command.timeout,
     });
   } else if (command.timeout) {
-    await page.waitForTimeout(command.timeout);
+    await frame.waitForTimeout(command.timeout);
   } else {
     // Default: wait for load state
-    await page.waitForLoadState('load');
+    await frame.waitForLoadState('load');
   }
 
   return successResponse(command.id, { waited: true });
 }
 
 async function handleScroll(command: ScrollCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
+  const frame = browser.getFrame();
 
   if (command.selector) {
-    const element = page.locator(command.selector);
+    const element = browser.getLocator(command.selector);
     await element.scrollIntoViewIfNeeded();
 
     if (command.x !== undefined || command.y !== undefined) {
@@ -663,7 +662,7 @@ async function handleScroll(command: ScrollCommand, browser: BrowserManager): Pr
       );
     }
   } else {
-    // Scroll the page
+    // Scroll the page/frame
     let deltaX = command.x ?? 0;
     let deltaY = command.y ?? 0;
 
@@ -685,7 +684,7 @@ async function handleScroll(command: ScrollCommand, browser: BrowserManager): Pr
       }
     }
 
-    await page.evaluate(`window.scrollBy(${deltaX}, ${deltaY})`);
+    await frame.evaluate(`window.scrollBy(${deltaX}, ${deltaY})`);
   }
 
   return successResponse(command.id, { scrolled: true });
@@ -719,13 +718,13 @@ async function handleContent(
   command: ContentCommand,
   browser: BrowserManager
 ): Promise<Response<ContentData>> {
-  const page = browser.getPage();
+  const frame = browser.getFrame();
 
   let html: string;
   if (command.selector) {
-    html = await page.locator(command.selector).innerHTML();
+    html = await browser.getLocator(command.selector).innerHTML();
   } else {
-    html = await page.content();
+    html = await frame.content();
   }
 
   return successResponse(command.id, { html });
@@ -866,6 +865,11 @@ async function handleDrag(command: DragCommand, browser: BrowserManager): Promis
 }
 
 async function handleFrame(command: FrameCommand, browser: BrowserManager): Promise<Response> {
+  if (command.selector === 'sub' && !command.name && !command.url) {
+    await browser.switchToSubFrame();
+    return successResponse(command.id, { switched: true });
+  }
+
   await browser.switchToFrame({
     selector: command.selector,
     name: command.name,
@@ -886,8 +890,8 @@ async function handleGetByRole(
   command: GetByRoleCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const locator = page.getByRole(command.role as any, { name: command.name });
+  const frame = browser.getFrame();
+  const locator = frame.getByRole(command.role as any, { name: command.name });
 
   switch (command.subaction) {
     case 'click':
@@ -909,8 +913,8 @@ async function handleGetByText(
   command: GetByTextCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const locator = page.getByText(command.text, { exact: command.exact });
+  const frame = browser.getFrame();
+  const locator = frame.getByText(command.text, { exact: command.exact });
 
   switch (command.subaction) {
     case 'click':
@@ -926,8 +930,8 @@ async function handleGetByLabel(
   command: GetByLabelCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const locator = page.getByLabel(command.label);
+  const frame = browser.getFrame();
+  const locator = frame.getByLabel(command.label);
 
   switch (command.subaction) {
     case 'click':
@@ -946,8 +950,8 @@ async function handleGetByPlaceholder(
   command: GetByPlaceholderCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const locator = page.getByPlaceholder(command.placeholder);
+  const frame = browser.getFrame();
+  const locator = frame.getByPlaceholder(command.placeholder);
 
   switch (command.subaction) {
     case 'click':
@@ -1279,8 +1283,7 @@ async function handleIsChecked(
 }
 
 async function handleCount(command: CountCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
-  const count = await page.locator(command.selector).count();
+  const count = await browser.getLocator(command.selector).count();
   return successResponse(command.id, { count });
 }
 
@@ -1288,8 +1291,7 @@ async function handleBoundingBox(
   command: BoundingBoxCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const box = await page.locator(command.selector).boundingBox();
+  const box = await browser.getLocator(command.selector).boundingBox();
   return successResponse(command.id, { box });
 }
 
@@ -1297,7 +1299,7 @@ async function handleStyles(
   command: StylesCommand,
   browser: BrowserManager
 ): Promise<Response<StylesData>> {
-  const page = browser.getPage();
+  const frame = browser.getFrame();
 
   // Shared extraction logic as a string to be eval'd in browser context
   const extractStylesScript = `(function(el) {
@@ -1337,7 +1339,7 @@ async function handleStyles(
   }
 
   // CSS selector - can match multiple elements
-  const elements = (await page.$$eval(
+  const elements = (await frame.$$eval(
     command.selector,
     (els, script) => {
       const fn = eval(script);
@@ -1466,7 +1468,7 @@ async function handleWheel(command: WheelCommand, browser: BrowserManager): Prom
   const page = browser.getPage();
 
   if (command.selector) {
-    const element = page.locator(command.selector);
+    const element = browser.getLocator(command.selector);
     await element.hover();
   }
 
@@ -1475,8 +1477,7 @@ async function handleWheel(command: WheelCommand, browser: BrowserManager): Prom
 }
 
 async function handleTap(command: TapCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
-  await page.tap(command.selector);
+  await browser.getLocator(command.selector).tap();
   return successResponse(command.id, { tapped: true });
 }
 
@@ -1505,14 +1506,12 @@ async function handleHighlight(
   command: HighlightCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  await page.locator(command.selector).highlight();
+  await browser.getLocator(command.selector).highlight();
   return successResponse(command.id, { highlighted: true });
 }
 
 async function handleClear(command: ClearCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
-  await page.locator(command.selector).clear();
+  await browser.getLocator(command.selector).clear();
   return successResponse(command.id, { cleared: true });
 }
 
@@ -1520,8 +1519,7 @@ async function handleSelectAll(
   command: SelectAllCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  await page.locator(command.selector).selectText();
+  await browser.getLocator(command.selector).selectText();
   return successResponse(command.id, { selected: true });
 }
 
@@ -1529,8 +1527,7 @@ async function handleInnerText(
   command: InnerTextCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const text = await page.locator(command.selector).innerText();
+  const text = await browser.getLocator(command.selector).innerText();
   return successResponse(command.id, { text });
 }
 
@@ -1538,8 +1535,7 @@ async function handleInnerHtml(
   command: InnerHtmlCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const html = await page.locator(command.selector).innerHTML();
+  const html = await browser.getLocator(command.selector).innerHTML();
   return successResponse(command.id, { html });
 }
 
@@ -1556,8 +1552,7 @@ async function handleSetValue(
   command: SetValueCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  await page.locator(command.selector).fill(command.value);
+  await browser.getLocator(command.selector).fill(command.value);
   return successResponse(command.id, { set: true });
 }
 
@@ -1565,8 +1560,7 @@ async function handleDispatch(
   command: DispatchEventCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  await page.locator(command.selector).dispatchEvent(command.event, command.eventInit);
+  await browser.getLocator(command.selector).dispatchEvent(command.event, command.eventInit);
   return successResponse(command.id, { dispatched: command.event });
 }
 
@@ -1574,8 +1568,8 @@ async function handleEvalHandle(
   command: Command & { action: 'evalhandle'; script: string },
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const handle = await page.evaluateHandle(command.script);
+  const frame = browser.getFrame();
+  const handle = await frame.evaluateHandle(command.script);
   const result = await handle.jsonValue().catch(() => 'Handle (non-serializable)');
   return successResponse(command.id, { result });
 }
@@ -1659,8 +1653,8 @@ async function handleGetByAltText(
   command: GetByAltTextCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const locator = page.getByAltText(command.text, { exact: command.exact });
+  const frame = browser.getFrame();
+  const locator = frame.getByAltText(command.text, { exact: command.exact });
 
   switch (command.subaction) {
     case 'click':
@@ -1676,8 +1670,8 @@ async function handleGetByTitle(
   command: GetByTitleCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const locator = page.getByTitle(command.text, { exact: command.exact });
+  const frame = browser.getFrame();
+  const locator = frame.getByTitle(command.text, { exact: command.exact });
 
   switch (command.subaction) {
     case 'click':
@@ -1693,8 +1687,8 @@ async function handleGetByTestId(
   command: GetByTestIdCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const locator = page.getByTestId(command.testId);
+  const frame = browser.getFrame();
+  const locator = frame.getByTestId(command.testId);
 
   switch (command.subaction) {
     case 'click':
@@ -1713,8 +1707,7 @@ async function handleGetByTestId(
 }
 
 async function handleNth(command: NthCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
-  const base = page.locator(command.selector);
+  const base = browser.getLocator(command.selector);
   const locator = command.index === -1 ? base.last() : base.nth(command.index);
 
   switch (command.subaction) {
@@ -1834,8 +1827,8 @@ async function handleWaitForFunction(
   command: WaitForFunctionCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  await page.waitForFunction(command.expression, { timeout: command.timeout });
+  const frame = browser.getFrame();
+  await frame.waitForFunction(command.expression, { timeout: command.timeout });
   return successResponse(command.id, { waited: true });
 }
 
@@ -1843,8 +1836,7 @@ async function handleScrollIntoView(
   command: ScrollIntoViewCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  await page.locator(command.selector).scrollIntoViewIfNeeded();
+  await browser.getLocator(command.selector).scrollIntoViewIfNeeded();
   return successResponse(command.id, { scrolled: true });
 }
 
@@ -1882,8 +1874,7 @@ async function handleMultiSelect(
   command: MultiSelectCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const selected = await page.locator(command.selector).selectOption(command.values);
+  const selected = await browser.getLocator(command.selector).selectOption(command.values);
   return successResponse(command.id, { selected });
 }
 
