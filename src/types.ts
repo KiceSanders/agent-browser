@@ -750,6 +750,11 @@ export interface ScreenshotCommand extends BaseCommand {
 
 export interface SnapshotCommand extends BaseCommand {
   action: 'snapshot';
+  interactive?: boolean;
+  cursor?: boolean;
+  maxDepth?: number;
+  compact?: boolean;
+  selector?: string;
 }
 
 export interface EvaluateCommand extends BaseCommand {

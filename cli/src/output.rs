@@ -1752,6 +1752,7 @@ Setup:
 
 Snapshot Options:
   -i, --interactive          Only interactive elements
+  -C, --cursor               Include cursor-interactive elements (cursor:pointer, onclick, tabindex)
   -c, --compact              Remove empty structural elements
   -d, --depth <n>            Limit tree depth
   -s, --selector <sel>       Scope to CSS selector
@@ -1792,6 +1793,7 @@ Environment:
 Examples:
   agent-browser open example.com
   agent-browser snapshot -i              # Interactive elements only
+  agent-browser snapshot -i -C           # Include cursor-interactive elements
   agent-browser click @e2                # Click by ref from snapshot
   agent-browser fill @e3 "test@example.com"
   agent-browser find role button click --name Submit

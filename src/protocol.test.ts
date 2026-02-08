@@ -434,6 +434,14 @@ describe('parseCommand', () => {
       }
     });
 
+    it('should parse snapshot with cursor filter', () => {
+      const result = parseCommand(cmd({ id: '1', action: 'snapshot', cursor: true }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect((result.command as any).cursor).toBe(true);
+      }
+    });
+
     it('should parse snapshot with compact filter', () => {
       const result = parseCommand(cmd({ id: '1', action: 'snapshot', compact: true }));
       expect(result.success).toBe(true);
@@ -464,6 +472,7 @@ describe('parseCommand', () => {
           id: '1',
           action: 'snapshot',
           interactive: true,
+          cursor: true,
           compact: true,
           maxDepth: 5,
           selector: '.content',
@@ -472,6 +481,7 @@ describe('parseCommand', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.command.interactive).toBe(true);
+        expect((result.command as any).cursor).toBe(true);
         expect(result.command.compact).toBe(true);
         expect(result.command.maxDepth).toBe(5);
         expect(result.command.selector).toBe('.content');

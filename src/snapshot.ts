@@ -157,94 +157,237 @@ async function findCursorInteractiveElements(
 > {
   const rootSelector = selector || 'body';
 
-  // Use a string function body to avoid TypeScript transpilation issues
-  const scriptBody = `(rootSel) => {
-    const results = [];
-
-    // Elements that already have interactive ARIA roles - skip these
-    const interactiveRoles = new Set([
-      'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox', 'listbox',
-      'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'searchbox',
-      'slider', 'spinbutton', 'switch', 'tab', 'treeitem'
-    ]);
-
-    // Tags that are already interactive by default
-    const interactiveTags = new Set([
-      'a', 'button', 'input', 'select', 'textarea', 'details', 'summary'
-    ]);
-
-    const root = document.querySelector(rootSel) || document.body;
-    const allElements = root.querySelectorAll('*');
-
-    // Build a unique selector for an element
-    const buildSelector = (el) => {
-      const testId = el.getAttribute('data-testid');
-      if (testId) return '[data-testid="' + testId + '"]';
-      if (el.id) return '#' + CSS.escape(el.id);
-
-      const path = [];
-      let current = el;
-      while (current && current !== document.body) {
-        let sel = current.tagName.toLowerCase();
-        const classes = Array.from(current.classList).filter(c => c.trim());
-        if (classes.length > 0) sel += '.' + CSS.escape(classes[0]);
-
-        const parent = current.parentElement;
-        if (parent) {
-          const siblings = Array.from(parent.children);
-          const matching = siblings.filter(s => {
-            if (s.tagName !== current.tagName) return false;
-            if (classes.length > 0 && !s.classList.contains(classes[0])) return false;
-            return true;
-          });
-          if (matching.length > 1) {
-            const idx = matching.indexOf(current) + 1;
-            sel += ':nth-of-type(' + idx + ')';
-          }
-        }
-        path.unshift(sel);
-        current = current.parentElement;
-        if (path.length >= 3) break;
+  try {
+    return await page.evaluate((rootSel) => {
+      interface Candidate {
+        element: any;
+        selector: string;
+        text: string;
+        tagName: string;
+        hasOnClick: boolean;
+        hasCursorPointer: boolean;
+        hasTabIndex: boolean;
+        hasTitle: boolean;
+        hasAriaLabel: boolean;
+        hasDirectCursorPointer: boolean;
+        depth: number;
+        order: number;
       }
-      return path.join(' > ');
-    };
 
-    for (const el of allElements) {
-      const tagName = el.tagName.toLowerCase();
-      if (interactiveTags.has(tagName)) continue;
+      const interactiveRoles = new Set([
+        'button',
+        'link',
+        'textbox',
+        'checkbox',
+        'radio',
+        'combobox',
+        'listbox',
+        'menuitem',
+        'menuitemcheckbox',
+        'menuitemradio',
+        'option',
+        'searchbox',
+        'slider',
+        'spinbutton',
+        'switch',
+        'tab',
+        'treeitem',
+      ]);
 
-      const role = el.getAttribute('role');
-      if (role && interactiveRoles.has(role.toLowerCase())) continue;
+      const interactiveTags = new Set([
+        'a',
+        'button',
+        'input',
+        'select',
+        'textarea',
+        'details',
+        'summary',
+      ]);
 
-      const computedStyle = getComputedStyle(el);
-      const hasCursorPointer = computedStyle.cursor === 'pointer';
-      const hasOnClick = el.hasAttribute('onclick') || el.onclick !== null;
-      const tabIndex = el.getAttribute('tabindex');
-      const hasTabIndex = tabIndex !== null && tabIndex !== '-1';
+      const doc = (globalThis as any).document as any;
+      const getComputedStyle = (globalThis as any).getComputedStyle as (el: any) => any;
+      const cssApi = (globalThis as any).CSS as { escape?: (value: string) => string } | undefined;
+      const escapeCss = (value: string): string =>
+        cssApi?.escape ? cssApi.escape(value) : value.replace(/["\\]/g, '\\$&');
 
-      if (!hasCursorPointer && !hasOnClick && !hasTabIndex) continue;
+      const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
-      const text = (el.textContent || '').trim().slice(0, 100);
-      if (!text) continue;
+      const getVisibleText = (el: any): string => {
+        if (!el || typeof el.innerText !== 'string') return '';
+        const innerText = normalizeText(el.innerText);
+        return innerText;
+      };
 
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) continue;
+      const getBestText = (el: any): string => {
+        const title = normalizeText(el.getAttribute('title') || '');
+        if (title) return title;
 
-      results.push({
-        selector: buildSelector(el),
-        text,
-        tagName,
-        hasOnClick,
-        hasCursorPointer,
-        hasTabIndex
+        const ariaLabel = normalizeText(el.getAttribute('aria-label') || '');
+        if (ariaLabel) return ariaLabel;
+
+        const visibleText = getVisibleText(el);
+        if (visibleText) return visibleText;
+
+        return normalizeText(el.textContent || '');
+      };
+
+      const getDepth = (el: any): number => {
+        let depth = 0;
+        let current: any = el;
+        while (current?.parentElement) {
+          depth += 1;
+          current = current.parentElement;
+        }
+        return depth;
+      };
+
+      const buildSelector = (el: any): string => {
+        const testId = el.getAttribute('data-testid');
+        if (testId) return `[data-testid=${JSON.stringify(testId)}]`;
+        if (el.id) return `#${escapeCss(el.id)}`;
+
+        const path: string[] = [];
+        let current: any = el;
+        while (current && current !== doc.body) {
+          let segment = current.tagName.toLowerCase();
+          const classNames = (Array.from(current.classList ?? []) as string[]).filter(
+            (className) => className.trim().length > 0
+          );
+          const firstClass = classNames[0];
+          if (firstClass) segment += `.${escapeCss(firstClass)}`;
+
+          const parent = current.parentElement;
+          if (parent) {
+            const sameTagSiblings = (Array.from(parent.children ?? []) as any[]).filter(
+              (sib) => sib.tagName === current.tagName
+            );
+            if (sameTagSiblings.length > 1) {
+              const idx = sameTagSiblings.indexOf(current) + 1;
+              segment += `:nth-of-type(${idx})`;
+            }
+          }
+
+          path.unshift(segment);
+          current = current.parentElement;
+
+          if (path.length >= 6) break;
+        }
+
+        if (path.length === 0) {
+          return el.tagName.toLowerCase();
+        }
+
+        return path.join(' > ');
+      };
+
+      const root = doc.querySelector(rootSel) ?? doc.body;
+      const allElements: any[] = [root, ...(Array.from(root.querySelectorAll('*')) as any[])];
+
+      const candidates: Candidate[] = [];
+      let order = 0;
+
+      for (const el of allElements) {
+        if (!el || el.nodeType !== 1) continue;
+
+        const tagName = el.tagName.toLowerCase();
+        if (interactiveTags.has(tagName)) continue;
+
+        const role = el.getAttribute('role');
+        if (role && interactiveRoles.has(role.toLowerCase())) continue;
+
+        const computedStyle = getComputedStyle(el);
+        const hasCursorPointer = computedStyle.cursor === 'pointer';
+        const hasDirectCursorPointer = el.style?.cursor === 'pointer';
+        const hasOnClick = el.hasAttribute('onclick') || typeof (el as any).onclick === 'function';
+
+        const tabIndex = el.getAttribute('tabindex');
+        const hasTabIndex = tabIndex !== null && Number.parseInt(tabIndex, 10) >= 0;
+
+        if (!hasCursorPointer && !hasOnClick && !hasTabIndex) continue;
+
+        if (
+          computedStyle.display === 'none' ||
+          computedStyle.visibility === 'hidden' ||
+          computedStyle.opacity === '0'
+        ) {
+          continue;
+        }
+
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+
+        const text = getBestText(el).slice(0, 100);
+        if (!text) continue;
+
+        const hasTitle = normalizeText(el.getAttribute('title') || '').length > 0;
+        const hasAriaLabel = normalizeText(el.getAttribute('aria-label') || '').length > 0;
+
+        candidates.push({
+          element: el,
+          selector: buildSelector(el),
+          text,
+          tagName,
+          hasOnClick,
+          hasCursorPointer,
+          hasTabIndex,
+          hasTitle,
+          hasAriaLabel,
+          hasDirectCursorPointer,
+          depth: getDepth(el),
+          order: order++,
+        });
+      }
+
+      const scoreCandidate = (candidate: Candidate): number => {
+        let score = 0;
+        if (candidate.hasTitle) score += 16;
+        else if (candidate.hasAriaLabel) score += 8;
+        if (candidate.hasDirectCursorPointer) score += 4;
+        if (candidate.hasOnClick) score += 2;
+        if (candidate.hasTabIndex) score += 1;
+        return score;
+      };
+
+      const sorted = [...candidates].sort((a, b) => {
+        const scoreDiff = scoreCandidate(b) - scoreCandidate(a);
+        if (scoreDiff !== 0) return scoreDiff;
+
+        const aLabeled = a.hasTitle || a.hasAriaLabel;
+        const bLabeled = b.hasTitle || b.hasAriaLabel;
+        if (aLabeled && bLabeled) {
+          if (a.depth !== b.depth) return a.depth - b.depth; // Prefer titled ancestors
+        } else if (a.depth !== b.depth) {
+          return b.depth - a.depth; // Prefer deepest unlabeled candidate
+        }
+
+        return a.order - b.order;
       });
-    }
-    return results;
-  }`;
 
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const fn = new Function('return ' + scriptBody)();
-  return page.evaluate(fn, rootSelector);
+      const selected: Candidate[] = [];
+      for (const candidate of sorted) {
+        const overlaps = selected.some(
+          (chosen) =>
+            chosen.element.contains(candidate.element) || candidate.element.contains(chosen.element)
+        );
+        if (overlaps) continue;
+        selected.push(candidate);
+      }
+
+      selected.sort((a, b) => a.order - b.order);
+
+      return selected.map((candidate) => ({
+        selector: candidate.selector,
+        text: candidate.text,
+        tagName: candidate.tagName,
+        hasOnClick: candidate.hasOnClick,
+        hasCursorPointer: candidate.hasCursorPointer,
+        hasTabIndex: candidate.hasTabIndex,
+      }));
+    }, rootSelector);
+  } catch (error) {
+    console.error('findCursorInteractiveElements failed:', error);
+    return [];
+  }
 }
 
 /**
@@ -276,14 +419,8 @@ export async function getEnhancedSnapshot(
   if (options.cursor) {
     const cursorElements = await findCursorInteractiveElements(page, options.selector);
 
-    // Filter out elements whose text is already captured in the snapshot
-    const existingTexts = new Set(Object.values(refs).map((r) => r.name?.toLowerCase()));
-
     const additionalLines: string[] = [];
     for (const el of cursorElements) {
-      // Skip if text already captured (likely already in ARIA tree)
-      if (existingTexts.has(el.text.toLowerCase())) continue;
-
       const ref = nextRef();
       const role = el.hasCursorPointer ? 'clickable' : el.hasOnClick ? 'clickable' : 'focusable';
 

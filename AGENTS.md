@@ -1,3 +1,30 @@
+# Scratch Pad Requirement
+
+Use this file as a scratch pad. Constantly update it after every interaction with helpful, actionable information (new findings, failures, fixes, commands run, and follow-up notes). Keep newest interaction notes at the top of the interaction log.
+
+# Recent Interaction Log
+
+## 2026-02-08
+
+- Reproduced real workflow issue on `https://provider.myhelo.com` where `agent-browser snapshot -i -C` returned `(no interactive elements)` after login even though nav controls (Modules, Support request, Chat & teams) were visibly clickable.
+- Verified live DOM had many `cursor:pointer` nodes post-login via `agent-browser eval`, proving page-side detection signals existed.
+- Identified root cause: `cursor` was dropped during protocol parsing because `snapshotSchema` in `src/protocol.ts` did not include `cursor`.
+- Added protocol-level tests in `src/protocol.test.ts` for snapshot cursor parsing; confirmed they failed before the fix.
+- Fixed schema/type path:
+  - Added `cursor?: boolean` to `snapshotSchema` in `src/protocol.ts`.
+  - Expanded `SnapshotCommand` in `src/types.ts` to include `interactive`, `cursor`, `maxDepth`, `compact`, and `selector`.
+- Rebuilt/restarted and re-ran full login script; `snapshot -i -C` now correctly returns clickable refs including:
+  - `Modules`
+  - `Support request`
+  - `Chat & teams`
+  - `Logout`
+- Test/verification commands run:
+  - `pnpm vitest run src/protocol.test.ts`
+  - `pnpm vitest run src/browser.test.ts -t "cursor|styx"`
+  - `pnpm build`
+  - `agent-browser close`
+- Additional note: current environment does not have `cargo`; `pnpm build:native` cannot run until Rust toolchain is installed.
+
 # Agent Guidelines for agent-browser
 
 ## Project Overview

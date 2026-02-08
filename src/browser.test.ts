@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { BrowserManager } from './browser.js';
 import { chromium } from 'playwright-core';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 describe('BrowserManager', () => {
   let browser: BrowserManager;
@@ -359,13 +364,89 @@ describe('BrowserManager', () => {
       expect(refValues.some((r) => r.role === 'clickable')).toBe(true);
     });
 
+    it('should detect cursor-pointer-only elements without onclick attribute', async () => {
+      const page = browser.getPage();
+      await page.setContent(`
+        <html><body>
+          <div id="btn1" style="cursor: pointer;">Click Me</div>
+          <script>
+            document.getElementById('btn1').addEventListener('click', () => {});
+          </script>
+        </body></html>
+      `);
+
+      const { tree, refs } = await browser.getSnapshot({ interactive: true, cursor: true });
+      expect(tree).toContain('Click Me');
+      expect(tree).toContain('[ref=');
+      const refValues = Object.values(refs);
+      expect(refValues.some((r) => r.name === 'Click Me')).toBe(true);
+    });
+
+    it('should detect styx-style nav buttons with hidden text and icons', async () => {
+      const page = browser.getPage();
+      await page.setContent(`
+        <html><body>
+          <div style="cursor: pointer; height: 44px;">
+            <div id="btn-modules" title="Modules" style="display: inline-block; width: 48px; cursor: pointer;">
+              <div style="opacity: 0; position: absolute; inset: 0; color: transparent;">Modules</div>
+              <div class="icon" style="font-size: 26px;">☰</div>
+            </div>
+          </div>
+          <div style="cursor: pointer; height: 44px;">
+            <div id="btn-logout" title="Logout" style="display: inline-block; width: 48px; cursor: pointer;">
+              <div style="opacity: 0; position: absolute; inset: 0; color: transparent;">Logout</div>
+              <div class="icon" style="font-size: 26px;">⏻</div>
+            </div>
+          </div>
+          <script>
+            document.getElementById('btn-modules').addEventListener('click', () => {
+              document.title = 'modules clicked';
+            });
+            document.getElementById('btn-logout').addEventListener('click', () => {
+              document.title = 'logout clicked';
+            });
+          </script>
+        </body></html>
+      `);
+
+      const { tree, refs } = await browser.getSnapshot({ interactive: true, cursor: true });
+      expect(tree).toContain('Modules');
+      expect(tree).toContain('Logout');
+
+      const refValues = Object.values(refs);
+      const clickables = refValues.filter((r) => r.role === 'clickable');
+      expect(clickables.length).toBe(2);
+    });
+
+    it('should deduplicate nested cursor-pointer elements, preferring titled ancestors', async () => {
+      const page = browser.getPage();
+      await page.setContent(`
+        <html><body>
+          <div title="Settings" style="cursor: pointer; width: 48px; height: 48px;">
+            <div class="icon" style="font-size: 20px;">⚙</div>
+            <span style="font-size: 12px;">Settings</span>
+          </div>
+        </body></html>
+      `);
+
+      const { refs } = await browser.getSnapshot({ interactive: true, cursor: true });
+      const clickables = Object.values(refs).filter((r) => r.role === 'clickable');
+      expect(clickables.length).toBe(1);
+      expect(clickables[0].name).toContain('Settings');
+    });
+
     it('should click cursor-interactive elements via refs', async () => {
       const page = browser.getPage();
       await page.setContent(`
         <html>
           <body>
-            <div id="clickable" style="cursor: pointer;" onclick="document.getElementById('result').textContent = 'clicked'">Click Me</div>
+            <div id="clickable" style="cursor: pointer;">Click Me</div>
             <div id="result">not clicked</div>
+            <script>
+              document.getElementById('clickable').addEventListener('click', () => {
+                document.getElementById('result').textContent = 'clicked';
+              });
+            </script>
           </body>
         </html>
       `);
@@ -383,6 +464,23 @@ describe('BrowserManager', () => {
       // Verify click worked
       const result = await page.locator('#result').textContent();
       expect(result).toBe('clicked');
+    });
+
+    it('should detect all buttons in styx framework test fixture', async () => {
+      const page = browser.getPage();
+      await page.goto(`file://${path.resolve(__dirname, '../test_styx_buttons.html')}`);
+
+      const { tree, refs } = await browser.getSnapshot({ interactive: true, cursor: true });
+
+      expect(tree).toContain('Modules');
+      expect(tree).toContain('Support request');
+      expect(tree).toContain('Logout');
+      expect(tree).toContain('Timeclock');
+      expect(tree).toContain('Training Center');
+
+      const refValues = Object.values(refs);
+      const clickables = refValues.filter((r) => r.role === 'clickable');
+      expect(clickables.length).toBeGreaterThanOrEqual(8);
     });
   });
 
