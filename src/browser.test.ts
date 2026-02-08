@@ -278,6 +278,95 @@ describe('BrowserManager', () => {
   });
 
   describe('snapshot', () => {
+    async function setMyheloLayoutContent(options?: {
+      showSidebar?: boolean;
+      showDrawer?: boolean;
+      showFab?: boolean;
+    }): Promise<void> {
+      const showSidebar = options?.showSidebar ?? true;
+      const showDrawer = options?.showDrawer ?? true;
+      const showFab = options?.showFab ?? true;
+      const page = browser.getPage();
+
+      const sidebarLeft = showSidebar ? '0' : '-340px';
+      const drawerLeft = showDrawer ? 'calc(100vw - 360px)' : 'calc(100vw + 16px)';
+      const fabDisplay = showFab ? 'flex' : 'none';
+
+      await page.setContent(`
+        <html>
+          <head>
+            <style>
+              html, body { margin: 0; padding: 0; width: 1280px; height: 672px; overflow: hidden; }
+              #sidebar-header, #sidebar-center, #sidebar-footer {
+                position: fixed;
+                left: ${sidebarLeft};
+                width: 300px;
+                box-sizing: border-box;
+                background: #f4f4f4;
+              }
+              #sidebar-header { top: 0; height: 76px; }
+              #sidebar-center { top: 76px; height: 476px; overflow: auto; }
+              #sidebar-footer { top: 552px; height: 120px; }
+
+              #contents-header, #contents-center, #contents-footer {
+                position: fixed;
+                left: 308px;
+                width: 972px;
+                box-sizing: border-box;
+                background: #fff;
+              }
+              #contents-header { top: 0; height: 76px; }
+              #contents-center { top: 76px; height: 476px; overflow: auto; }
+              #contents-footer { top: 552px; height: 120px; }
+
+              #drawer-container {
+                position: fixed;
+                left: ${drawerLeft};
+                top: 0;
+                width: 360px;
+                height: 672px;
+                background: #eef3ff;
+              }
+              #drawer-header { position: absolute; top: 0; left: 0; width: 360px; height: 76px; }
+              #drawer-center { position: absolute; top: 76px; left: 0; width: 360px; height: 476px; }
+              #drawer-footer { position: absolute; top: 552px; left: 0; width: 360px; height: 120px; }
+
+              #chat-fab {
+                position: fixed;
+                right: 24px;
+                bottom: 24px;
+                width: 56px;
+                height: 56px;
+                border-radius: 50%;
+                border: 0;
+                cursor: pointer;
+                display: ${fabDisplay};
+                align-items: center;
+                justify-content: center;
+              }
+            </style>
+          </head>
+          <body>
+            <div id="sidebar-header"><button>Sidebar profile</button></div>
+            <div id="sidebar-center"><button>Sidebar threads</button></div>
+            <div id="sidebar-footer"><button>Sidebar footer</button></div>
+
+            <div id="contents-header"><button>Thread header</button></div>
+            <div id="contents-center"><button>Main content action</button></div>
+            <div id="contents-footer"><button>Composer action</button></div>
+
+            <div id="drawer-container">
+              <div id="drawer-header"><button>Drawer header</button></div>
+              <div id="drawer-center"><button>Drawer content</button></div>
+              <div id="drawer-footer"><button>Drawer footer</button></div>
+            </div>
+
+            <button id="chat-fab" class="fab">+</button>
+          </body>
+        </html>
+      `);
+    }
+
     it('should get snapshot with refs', async () => {
       const page = browser.getPage();
       await page.goto('https://example.com');
@@ -308,6 +397,70 @@ describe('BrowserManager', () => {
       const { tree: compactSnapshot } = await browser.getSnapshot({ compact: true });
       // Compact should be equal or shorter
       expect(compactSnapshot.length).toBeLessThanOrEqual(fullSnapshot.length);
+    });
+
+    it('should partition myhelo layout into sidebar/contents/drawer/fab across snapshot modes', async () => {
+      await setMyheloLayoutContent({ showSidebar: true, showDrawer: true, showFab: true });
+
+      const snapshots = [
+        await browser.getSnapshot(),
+        await browser.getSnapshot({ interactive: true }),
+        await browser.getSnapshot({ interactive: true, cursor: true }),
+        await browser.getSnapshot({ compact: true }),
+      ];
+
+      for (const { tree } of snapshots) {
+        expect(tree).toContain('# Sidebar:');
+        expect(tree).toContain('# Contents:');
+        expect(tree).toContain('# Drawer:');
+        expect(tree).toContain('# FAB:');
+      }
+    });
+
+    it('should skip sidebar and drawer sections when they are off-screen', async () => {
+      await setMyheloLayoutContent({ showSidebar: false, showDrawer: false, showFab: false });
+
+      const { tree } = await browser.getSnapshot({ interactive: true, cursor: true });
+
+      expect(tree).toContain('# Contents:');
+      expect(tree).not.toContain('# Sidebar:');
+      expect(tree).not.toContain('# Drawer:');
+      expect(tree).not.toContain('# FAB:');
+    });
+
+    it('should include FAB section for myhelo floating circle button without fab class token', async () => {
+      const page = browser.getPage();
+      await page.setContent(`
+        <html>
+          <head>
+            <style>
+              html, body { margin: 0; padding: 0; width: 1280px; height: 672px; overflow: hidden; }
+              #sidebar-center { position: fixed; left: 0; top: 76px; width: 300px; height: 476px; }
+              #contents-center { position: fixed; left: 308px; top: 76px; width: 972px; height: 476px; }
+              button.circle {
+                position: fixed;
+                right: 32px;
+                bottom: 32px;
+                width: 48px;
+                height: 48px;
+                border: 0;
+                border-radius: 24px;
+                z-index: 100;
+                cursor: pointer;
+              }
+            </style>
+          </head>
+          <body>
+            <div id="sidebar-center"><button>Threads</button></div>
+            <div id="contents-center"><button>Conversation</button></div>
+            <button class="circle" title="Compose">+</button>
+          </body>
+        </html>
+      `);
+
+      const { tree } = await browser.getSnapshot({ interactive: true, cursor: true });
+      expect(tree).toContain('# FAB:');
+      expect(tree).toContain('button "+"');
     });
 
     it('should not capture cursor-interactive elements without cursor flag', async () => {

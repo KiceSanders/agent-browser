@@ -6,6 +6,84 @@ Use this file as a scratch pad. Constantly update it after every interaction wit
 
 ## 2026-02-08
 
+- Restarted daemon after latest build to ensure new snapshot logic is active:
+  - `agent-browser close`
+- FAB visibility regression reported by user: FAB was visible in live Myhelo but `snapshot -i -C` omitted `# FAB:`.
+- Live repro details:
+  - `agent-browser snapshot -i -C` output included `# Sidebar:` + `# Contents:` only.
+  - `agent-browser eval` found a visible floating button:
+    - `tag=button`, `class=circle`
+    - `position=fixed`, `width/height=48x48`, `borderRadius=24px`, `zIndex=100`
+    - `left/top/right/bottom=1200/592/1248/640` within `1280x672` viewport
+    - no `fab` token in id/class
+- Added failing TDD test in `src/browser.test.ts`:
+  - `should include FAB section for myhelo floating circle button without fab class token`
+  - Red-state command:
+    - `pnpm vitest run src/browser.test.ts -t "floating circle button without fab class token"` (failed; no `# FAB:`)
+- Fix in `src/snapshot.ts` (`getMyheloActiveRegions`):
+  - Kept existing token detection (`fab` in id/class).
+  - Added fallback FAB heuristic for floating controls:
+    - visible + on-screen
+    - fixed/sticky (or absolute with high z-index)
+    - compact dimensions (32..120 px)
+    - near bottom-right corner
+    - interactive (`button/a`, role button/link, pointer/onclick/tabindex)
+    - rounded (`circle` class token or border-radius threshold)
+- Updated assertion in the new test to match actual ARIA output (`button "+"` rather than title text).
+- Post-fix verification:
+  - `pnpm vitest run src/browser.test.ts -t "floating circle button without fab class token|partition myhelo layout|skip sidebar and drawer sections"` ✅
+  - `pnpm build` ✅
+- Additional note:
+  - `pnpm vitest run src/browser.test.ts -t "snapshot"` surfaced pre-existing environment issues (`test_styx_buttons.html` file not found and a separate timeout in locator-resolution after fixture failure), not introduced by this FAB fix.
+- Post-cleanup verification:
+  - Removed accidental unused `windowRef` declaration from cursor-interactive evaluator.
+  - Re-ran `pnpm build` ✅
+  - Re-ran `pnpm vitest run src/browser.test.ts -t "partition myhelo layout|skip sidebar and drawer sections"` ✅
+- Live regression check after detector update:
+  - `bash myhelo/workflows/login.sh && agent-browser snapshot -i -C && agent-browser click @e3 && agent-browser wait 500 && agent-browser frame sub && agent-browser snapshot -i -C`
+  - Sub-frame output is now regioned with `# Sidebar:` and `# Contents:` sections.
+  - Hidden off-screen drawer is excluded (no `# Drawer:` section when drawer is not active).
+- Added Myhelo detector support for alternate content layout IDs/classes:
+  - `#panel-header`, `#panel-center`, `#panel-footer`, `.component.reverb.threads`
+  - Existing selectors retained: `#contents-*`, `.component.reverb.messages`
+- Root cause for initial live mismatch after first implementation:
+  - Chat-thread list state used `#panel-center` instead of `#contents-center`, so strict `#contents-center` gate prevented sectioning.
+- Additional verification commands:
+  - `agent-browser snapshot` ✅ regioned
+  - `agent-browser snapshot --compact` ✅ regioned
+  - `pnpm build` ✅
+- Note: `agent-browser click @e19` failed once with strict-selector ambiguity on a duplicated icon label; unrelated to region visibility gating.
+- Rebuilt TypeScript and restarted daemon after test updates:
+  - `pnpm build`
+  - `agent-browser close`
+- Updated TDD: off-screen sidebar/drawer test now also hides FAB and asserts `# FAB:` is absent.
+- Verified region partitioning passes with:
+  - `pnpm vitest run src/browser.test.ts -t "partition myhelo layout|skip sidebar and drawer sections"`
+- Noted user confirmation: FAB is not visible on the current chat-thread screen; region logic already excludes hidden/off-screen FAB candidates.
+- Added TDD tests in `src/browser.test.ts` for Myhelo region partitioning:
+  - `should partition myhelo layout into sidebar/contents/drawer/fab across snapshot modes`
+  - `should skip sidebar and drawer sections when they are off-screen`
+- Confirmed red-state via:
+  - `pnpm vitest run src/browser.test.ts -t "partition myhelo layout|skip sidebar and drawer sections"`
+- Failure baseline (expected):
+  - Snapshot output is still a flat list (`- document: ...`) with no `# Sidebar:`/`# Contents:`/`# Drawer:`/`# FAB:` sections.
+  - Hidden/off-screen sidebar/drawer are still included because region visibility filtering is not implemented yet.
+- Ran `bash myhelo/workflows/chat.sh` (escalated due socket dir write) to reproduce chat-thread state in live Myhelo.
+- Observed current `snapshot -i -C` in sub-frame is flat (not region-partitioned): clickables and thread/sidebar items are mixed in one list.
+- Confirmed Myhelo sub-frame region IDs/classes exist:
+  - Sidebar: `#sidebar-header`, `#sidebar-center`, `#sidebar-footer`, `.component.reverb.sidebar`
+  - Contents: `#contents-header`, `#contents-center`, `#contents-footer`
+  - Drawer: `#drawer-container`, `#drawer-header`, `#drawer-center`, `#drawer-footer`
+- Verified hidden drawer behavior in chat view:
+  - `#drawer-container` rect is off-screen (`left=1280`, `right=1640` with viewport width `1280`) and transformed (`matrix(..., 360, 0)`), so it should be treated as inactive.
+- Checked for FAB naming hooks in live chat DOM (`id/class` matching `fab`) and found none in this state.
+- `agent-browser frame sub` failed once with `Visible subframe not found` because current context was already inside the sub frame.
+- Validated command syntax in live session: `agent-browser wait --fn "document.querySelectorAll('.component.loading').length === 0"` returned `✓ Done`.
+- Confirmed `agent-browser wait --fn "<js expression>"` is the right way to replace fixed sleep in `myhelo/workflows/login.sh` for loader disappearance; `wait` action supports selector state internally (`attached|detached|visible|hidden`) but CLI parser currently does not expose a `--state` flag.
+- Suggested waiting on `.component.loading` elements via JS condition (e.g., zero matches or all hidden/off-screen) instead of `agent-browser wait 3000`.
+- Ran `agent-browser snapshot` from repo root on user request; output showed:
+  - `document` with text including `Modules`, `Support request`, `Chat & teams`, `Logout`, and `Training Center`
+  - one `iframe` node
 - Reproduced real workflow issue on `https://provider.myhelo.com` where `agent-browser snapshot -i -C` returned `(no interactive elements)` after login even though nav controls (Modules, Support request, Chat & teams) were visibly clickable.
 - Verified live DOM had many `cursor:pointer` nodes post-login via `agent-browser eval`, proving page-side detection signals existed.
 - Identified root cause: `cursor` was dropped during protocol parsing because `snapshotSchema` in `src/protocol.ts` did not include `cursor`.

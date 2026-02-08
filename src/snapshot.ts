@@ -47,6 +47,12 @@ export interface SnapshotOptions {
   selector?: string;
 }
 
+interface SnapshotRegion {
+  key: 'sidebar' | 'contents' | 'drawer' | 'fab';
+  title: string;
+  selectors: string[];
+}
+
 // Counter for generating refs
 let refCounter = 0;
 
@@ -391,46 +397,337 @@ async function findCursorInteractiveElements(
 }
 
 /**
- * Get enhanced snapshot with refs and optional filtering
+ * Detect active Myhelo sub-frame regions and return unique selectors for each.
  */
-export async function getEnhancedSnapshot(
+async function getMyheloActiveRegions(page: Page | Frame): Promise<SnapshotRegion[]> {
+  try {
+    return await page.evaluate(() => {
+      type RegionKey = 'sidebar' | 'contents' | 'drawer' | 'fab';
+
+      interface RegionDefinition {
+        key: RegionKey;
+        title: string;
+        candidates: string[];
+      }
+
+      interface RegionResult {
+        key: RegionKey;
+        title: string;
+        selectors: string[];
+      }
+
+      const doc = (globalThis as any).document as any;
+      const windowRef = globalThis as any;
+      const getComputedStyle = (globalThis as any).getComputedStyle as (el: any) => any;
+      const cssApi = (globalThis as any).CSS as { escape?: (value: string) => string } | undefined;
+      const escapeCss = (value: string): string =>
+        cssApi?.escape ? cssApi.escape(value) : value.replace(/["\\]/g, '\\$&');
+
+      const definitions: RegionDefinition[] = [
+        {
+          key: 'sidebar',
+          title: 'Sidebar',
+          candidates: [
+            '#sidebar-header',
+            '#sidebar-center',
+            '#sidebar-footer',
+            '.component.reverb.sidebar',
+          ],
+        },
+        {
+          key: 'contents',
+          title: 'Contents',
+          candidates: [
+            '#panel-header',
+            '#panel-center',
+            '#panel-footer',
+            '#contents-header',
+            '#contents-center',
+            '#contents-footer',
+            '.component.reverb.threads',
+            '.component.reverb.messages',
+          ],
+        },
+        {
+          key: 'drawer',
+          title: 'Drawer',
+          candidates: ['#drawer-container', '#drawer-header', '#drawer-center', '#drawer-footer'],
+        },
+      ];
+
+      const hasMyheloSubLayout =
+        !!(
+          doc.querySelector('#panel-center') ||
+          doc.querySelector('#contents-center') ||
+          doc.querySelector('.component.reverb.threads') ||
+          doc.querySelector('.component.reverb.messages')
+        ) &&
+        !!(
+          doc.querySelector('#sidebar-center') ||
+          doc.querySelector('#drawer-container') ||
+          doc.querySelector('.component.reverb.sidebar')
+        );
+
+      if (!hasMyheloSubLayout) {
+        return [] as RegionResult[];
+      }
+
+      const getDepth = (el: any): number => {
+        let depth = 0;
+        let current: any = el;
+        while (current?.parentElement) {
+          depth += 1;
+          current = current.parentElement;
+        }
+        return depth;
+      };
+
+      const isOnScreenAndVisible = (el: any): boolean => {
+        if (!el || el.nodeType !== 1) return false;
+
+        const style = getComputedStyle(el);
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          style.opacity === '0' ||
+          style.pointerEvents === 'none'
+        ) {
+          return false;
+        }
+
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+
+        const intersectionWidth =
+          Math.min(rect.right, windowRef.innerWidth) - Math.max(rect.left, 0);
+        const intersectionHeight =
+          Math.min(rect.bottom, windowRef.innerHeight) - Math.max(rect.top, 0);
+        return intersectionWidth > 1 && intersectionHeight > 1;
+      };
+
+      const buildUniqueSelector = (el: any): string => {
+        if (el.id) {
+          const idSelector = `#${escapeCss(el.id)}`;
+          if (doc.querySelectorAll(idSelector).length === 1) {
+            return idSelector;
+          }
+        }
+
+        const testId = el.getAttribute('data-testid');
+        if (testId) {
+          const testIdSelector = `[data-testid=${JSON.stringify(testId)}]`;
+          if (doc.querySelectorAll(testIdSelector).length === 1) {
+            return testIdSelector;
+          }
+        }
+
+        const path: string[] = [];
+        let current: any = el;
+        while (current && current !== doc.body && current.nodeType === 1) {
+          let segment = current.tagName.toLowerCase();
+          const classNames = (Array.from(current.classList ?? []) as string[]).filter(
+            (className) => className.trim().length > 0
+          );
+          const firstClass = classNames[0];
+          if (firstClass) segment += `.${escapeCss(firstClass)}`;
+
+          const parent = current.parentElement;
+          if (parent) {
+            const sameTagSiblings = (Array.from(parent.children ?? []) as any[]).filter(
+              (sib) => sib.tagName === current.tagName
+            );
+            if (sameTagSiblings.length > 1) {
+              const idx = sameTagSiblings.indexOf(current) + 1;
+              segment += `:nth-of-type(${idx})`;
+            }
+          }
+
+          path.unshift(segment);
+          current = current.parentElement;
+        }
+
+        if (path.length === 0) {
+          return el.tagName.toLowerCase();
+        }
+
+        return path.join(' > ');
+      };
+
+      const dedupeTopLevelElements = (elements: any[]): any[] => {
+        const uniqueElements = Array.from(new Set(elements));
+        uniqueElements.sort((a, b) => getDepth(a) - getDepth(b));
+
+        const selected: any[] = [];
+        for (const candidate of uniqueElements) {
+          const nestedInSelected = selected.some((picked) => picked.contains(candidate));
+          if (nestedInSelected) continue;
+          selected.push(candidate);
+        }
+
+        return selected;
+      };
+
+      const collectRegionSelectors = (candidateSelectors: string[]): string[] => {
+        const matches: any[] = [];
+        for (const selector of candidateSelectors) {
+          const elements = Array.from(doc.querySelectorAll(selector));
+          for (const el of elements) {
+            if (isOnScreenAndVisible(el)) {
+              matches.push(el);
+            }
+          }
+        }
+
+        const selected = dedupeTopLevelElements(matches);
+        return selected.map((el) => buildUniqueSelector(el));
+      };
+
+      const fabTokenPattern = /(^|[-_])fab($|[-_])/i;
+      const circleTokenPattern = /(^|[-_])circle($|[-_])/i;
+      const parseRadius = (raw: string, minDimension: number): number => {
+        if (!raw) return 0;
+        const token = raw.split(/\s+/)[0];
+        if (token.endsWith('%')) {
+          const percent = Number.parseFloat(token.slice(0, -1));
+          if (Number.isFinite(percent)) return (percent / 100) * minDimension;
+          return 0;
+        }
+        const px = Number.parseFloat(token);
+        if (Number.isFinite(px)) return px;
+        return 0;
+      };
+      const isInteractiveElement = (el: any, style: any): boolean => {
+        const tagName = String(el.tagName || '').toLowerCase();
+        if (tagName === 'button' || tagName === 'a') return true;
+
+        const role = String(el.getAttribute('role') || '').toLowerCase();
+        if (role === 'button' || role === 'link') return true;
+
+        if (style.cursor === 'pointer') return true;
+        if (el.hasAttribute('onclick') || typeof el.onclick === 'function') return true;
+
+        const tabIndexAttr = el.getAttribute('tabindex');
+        if (tabIndexAttr !== null && Number.parseInt(tabIndexAttr, 10) >= 0) return true;
+
+        return false;
+      };
+      const isFabLikeFloatingControl = (el: any): boolean => {
+        if (!isOnScreenAndVisible(el)) return false;
+
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        const minDimension = Math.min(rect.width, rect.height);
+        const maxDimension = Math.max(rect.width, rect.height);
+
+        const zIndex = Number.parseInt(style.zIndex || '0', 10);
+        const floatingPosition =
+          style.position === 'fixed' ||
+          style.position === 'sticky' ||
+          (style.position === 'absolute' && Number.isFinite(zIndex) && zIndex >= 20);
+        if (!floatingPosition) return false;
+
+        if (minDimension < 32 || maxDimension > 120) return false;
+
+        const viewportWidth = (globalThis as any).innerWidth as number;
+        const viewportHeight = (globalThis as any).innerHeight as number;
+        const nearBottomRight =
+          rect.right >= viewportWidth - 200 && rect.bottom >= viewportHeight - 200;
+        if (!nearBottomRight) return false;
+
+        if (!isInteractiveElement(el, style)) return false;
+
+        const classes = Array.from(el.classList ?? []) as string[];
+        const hasCircleClass = classes.some((className) => circleTokenPattern.test(className));
+        const radius = parseRadius(
+          style.borderRadius || style.borderTopLeftRadius || '',
+          minDimension
+        );
+        const isRounded = hasCircleClass || radius >= minDimension * 0.35;
+        if (!isRounded) return false;
+
+        return true;
+      };
+      const collectFabSelectors = (): string[] => {
+        const fabElements = (Array.from(doc.querySelectorAll('*')) as any[]).filter((el) => {
+          if (!isOnScreenAndVisible(el)) return false;
+
+          const id = String(el.id || '');
+          const classes = Array.from(el.classList ?? []) as string[];
+
+          if (fabTokenPattern.test(id)) return true;
+          if (classes.some((className) => fabTokenPattern.test(className))) return true;
+
+          return isFabLikeFloatingControl(el);
+        });
+
+        const selected = dedupeTopLevelElements(fabElements);
+        return selected.map((el) => buildUniqueSelector(el));
+      };
+
+      const regions: RegionResult[] = [];
+
+      for (const definition of definitions) {
+        const selectors = collectRegionSelectors(definition.candidates);
+        if (selectors.length > 0) {
+          regions.push({
+            key: definition.key,
+            title: definition.title,
+            selectors,
+          });
+        }
+      }
+
+      const fabSelectors = collectFabSelectors();
+      if (fabSelectors.length > 0) {
+        regions.push({
+          key: 'fab',
+          title: 'FAB',
+          selectors: fabSelectors,
+        });
+      }
+
+      return regions;
+    });
+  } catch (error) {
+    console.error('getMyheloActiveRegions failed:', error);
+    return [];
+  }
+}
+
+async function getEnhancedSnapshotForScope(
   page: Page | Frame,
-  options: SnapshotOptions = {}
-): Promise<EnhancedSnapshot> {
-  resetRefs();
-  const refs: RefMap = {};
-
-  // Get ARIA snapshot from Playwright
-  const locator = options.selector ? page.locator(options.selector) : page.locator(':root');
-  const ariaTree = await locator.ariaSnapshot();
-
-  if (!ariaTree) {
-    return {
-      tree: '(empty)',
-      refs: {},
-    };
+  options: SnapshotOptions,
+  refs: RefMap,
+  tracker: RoleNameTracker
+): Promise<string> {
+  let enhancedTree = '(empty)';
+  try {
+    const locator = options.selector ? page.locator(options.selector) : page.locator(':root');
+    const ariaTree = await locator.ariaSnapshot();
+    if (ariaTree) {
+      enhancedTree = processAriaTree(ariaTree, refs, options, tracker, false);
+    } else if (options.interactive) {
+      enhancedTree = '(no interactive elements)';
+    }
+  } catch (error) {
+    // Ignore strict/selector errors for scoped region snapshots and treat as empty.
+    enhancedTree = options.interactive ? '(no interactive elements)' : '(empty)';
   }
 
-  // Parse and enhance the ARIA tree
-  const enhancedTree = processAriaTree(ariaTree, refs, options);
-
-  // When cursor flag is set, also find cursor-interactive elements
-  // that may not have proper ARIA roles
   if (options.cursor) {
     const cursorElements = await findCursorInteractiveElements(page, options.selector);
-
     const additionalLines: string[] = [];
+
     for (const el of cursorElements) {
       const ref = nextRef();
       const role = el.hasCursorPointer ? 'clickable' : el.hasOnClick ? 'clickable' : 'focusable';
 
       refs[ref] = {
         selector: el.selector,
-        role: role,
+        role,
         name: el.text,
       };
 
-      // Build description of why it's interactive
       const hints: string[] = [];
       if (el.hasCursorPointer) hints.push('cursor:pointer');
       if (el.hasOnClick) hints.push('onclick');
@@ -441,14 +738,87 @@ export async function getEnhancedSnapshot(
 
     if (additionalLines.length > 0) {
       const separator =
-        enhancedTree === '(no interactive elements)' ? '' : '\n# Cursor-interactive elements:\n';
-      const base = enhancedTree === '(no interactive elements)' ? '' : enhancedTree;
+        enhancedTree === '(no interactive elements)' || enhancedTree === '(empty)'
+          ? ''
+          : '\n# Cursor-interactive elements:\n';
+      const base =
+        enhancedTree === '(no interactive elements)' || enhancedTree === '(empty)'
+          ? ''
+          : enhancedTree;
+      return base + separator + additionalLines.join('\n');
+    }
+  }
+
+  return enhancedTree;
+}
+
+async function buildMyheloRegionSection(
+  page: Page | Frame,
+  options: SnapshotOptions,
+  refs: RefMap,
+  tracker: RoleNameTracker,
+  selectors: string[]
+): Promise<string> {
+  const sectionParts: string[] = [];
+
+  for (const selector of selectors) {
+    const scopedTree = await getEnhancedSnapshotForScope(
+      page,
+      { ...options, selector },
+      refs,
+      tracker
+    );
+    if (!scopedTree || scopedTree === '(empty)' || scopedTree === '(no interactive elements)') {
+      continue;
+    }
+    sectionParts.push(scopedTree);
+  }
+
+  if (sectionParts.length > 0) {
+    return sectionParts.join('\n');
+  }
+
+  return options.interactive ? '(no interactive elements)' : '(empty)';
+}
+
+/**
+ * Get enhanced snapshot with refs and optional filtering
+ */
+export async function getEnhancedSnapshot(
+  page: Page | Frame,
+  options: SnapshotOptions = {}
+): Promise<EnhancedSnapshot> {
+  resetRefs();
+  const refs: RefMap = {};
+  const tracker = createRoleNameTracker();
+
+  if (!options.selector) {
+    const regions = await getMyheloActiveRegions(page);
+    if (regions.length > 0) {
+      const sections: string[] = [];
+
+      for (const region of regions) {
+        const sectionTree = await buildMyheloRegionSection(
+          page,
+          options,
+          refs,
+          tracker,
+          region.selectors
+        );
+        sections.push(`# ${region.title}:\n${sectionTree}`);
+      }
+
+      removeNthFromNonDuplicates(refs, tracker);
+
       return {
-        tree: base + separator + additionalLines.join('\n'),
+        tree: sections.join('\n\n'),
         refs,
       };
     }
   }
+
+  const enhancedTree = await getEnhancedSnapshotForScope(page, options, refs, tracker);
+  removeNthFromNonDuplicates(refs, tracker);
 
   return { tree: enhancedTree, refs };
 }
@@ -503,10 +873,15 @@ function createRoleNameTracker(): RoleNameTracker {
 /**
  * Process ARIA snapshot: add refs and apply filters
  */
-function processAriaTree(ariaTree: string, refs: RefMap, options: SnapshotOptions): string {
+function processAriaTree(
+  ariaTree: string,
+  refs: RefMap,
+  options: SnapshotOptions,
+  tracker: RoleNameTracker = createRoleNameTracker(),
+  finalizeNth: boolean = true
+): string {
   const lines = ariaTree.split('\n');
   const result: string[] = [];
-  const tracker = createRoleNameTracker();
 
   // For interactive-only mode, we collect just interactive elements
   if (options.interactive) {
@@ -539,8 +914,10 @@ function processAriaTree(ariaTree: string, refs: RefMap, options: SnapshotOption
       }
     }
 
-    // Post-process: remove nth from refs that don't have duplicates
-    removeNthFromNonDuplicates(refs, tracker);
+    if (finalizeNth) {
+      // Post-process: remove nth from refs that don't have duplicates
+      removeNthFromNonDuplicates(refs, tracker);
+    }
 
     return result.join('\n') || '(no interactive elements)';
   }
@@ -553,8 +930,10 @@ function processAriaTree(ariaTree: string, refs: RefMap, options: SnapshotOption
     }
   }
 
-  // Post-process: remove nth from refs that don't have duplicates
-  removeNthFromNonDuplicates(refs, tracker);
+  if (finalizeNth) {
+    // Post-process: remove nth from refs that don't have duplicates
+    removeNthFromNonDuplicates(refs, tracker);
+  }
 
   // If compact mode, remove empty structural elements
   if (options.compact) {
