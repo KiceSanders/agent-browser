@@ -1,11 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { BrowserManager } from './browser.js';
 import { chromium } from 'playwright-core';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 describe('BrowserManager', () => {
   let browser: BrowserManager;
@@ -655,7 +650,20 @@ describe('BrowserManager', () => {
 
     it('should detect all buttons in styx framework test fixture', async () => {
       const page = browser.getPage();
-      await page.goto(`file://${path.resolve(__dirname, '../test_styx_buttons.html')}`);
+      await page.setContent(`
+        <html><body>
+          <nav>
+            <div style="cursor: pointer;" title="Modules">&#xF0234; Modules</div>
+            <div style="cursor: pointer;" title="Support request">&#xF045A; Support request</div>
+            <div style="cursor: pointer;" title="Logout">&#xF0206; Logout</div>
+            <div style="cursor: pointer;" title="Timeclock">&#xF012C; Timeclock</div>
+            <div style="cursor: pointer;" title="Training Center">&#xF0337; Training Center</div>
+            <div style="cursor: pointer;" title="Files">&#xF024B; Files</div>
+            <div style="cursor: pointer;" title="Memos">&#xF082E; Memos</div>
+            <div style="cursor: pointer;" title="Chat">&#xF028C; Chat</div>
+          </nav>
+        </body></html>
+      `);
 
       const { tree, refs } = await browser.getSnapshot({ interactive: true, cursor: true });
 
@@ -674,17 +682,22 @@ describe('BrowserManager', () => {
   describe('locator resolution', () => {
     it('should resolve CSS selector', async () => {
       const page = browser.getPage();
-      await page.goto('https://example.com');
+      await page.setContent(`
+        <html><body><h1>Example Domain</h1><p>This is a test page.</p></body></html>
+      `);
       const locator = browser.getLocator('h1');
       const text = await locator.textContent();
       expect(text).toBe('Example Domain');
     });
 
     it('should resolve ref from snapshot', async () => {
+      const page = browser.getPage();
+      await page.setContent(`
+        <html><body><h1>Example Domain</h1><p>This is a test page.</p></body></html>
+      `);
       await browser.getSnapshot(); // Populates refs
       // After snapshot, refs like @e1 should be available
       // This tests the ref resolution mechanism
-      const page = browser.getPage();
       const h1 = await page.locator('h1').textContent();
       expect(h1).toBe('Example Domain');
     });
