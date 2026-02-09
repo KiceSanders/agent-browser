@@ -17,6 +17,7 @@
     "prepare": "husky",
     "version:sync": "node scripts/sync-version.js",
     "version": "npm run version:sync && git add cli/Cargo.toml",
+    "generate:mdi": "node scripts/generate-mdi-map.js",
     "build": "tsc",
     "build:native": "npm run version:sync && cargo build --release --manifest-path cli/Cargo.toml && node scripts/copy-native.js",
     "build:linux": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-linux",
@@ -63,6 +64,7 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.8",
+    "@mdi/svg": "^7.4.47",
     "@types/node": "^20.10.0",
     "@types/ws": "^8.18.1",
     "husky": "^9.1.7",

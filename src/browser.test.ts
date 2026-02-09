@@ -586,15 +586,23 @@ describe('BrowserManager', () => {
 
       const { tree } = await browser.getSnapshot({ interactive: true, cursor: true });
 
+      // Semantic class inference still wins for "menu" class
       expect(tree).toContain('clickable "<menu>"');
-      expect(tree).toContain('clickable "<icon-u+f0156>"');
+      // MDI codepoint resolved to icon name (U+F0156 = close)
+      expect(tree).toContain('clickable "<close>"');
+      // Mixed icon+text: leading icon stripped, text preserved
       expect(tree).toContain('clickable "Projects"');
-      expect(tree).toContain('button "<icon-u+f0415>"');
+      // MDI codepoint resolved to icon name (U+F0415 = plus)
+      expect(tree).toContain('button "<plus>"');
 
+      // Raw PUA glyphs should never appear
       expect(tree).not.toContain('clickable "󰇙"');
       expect(tree).not.toContain('clickable "󰅖"');
       expect(tree).not.toContain('clickable "󰋘 Projects"');
       expect(tree).not.toContain('button "󰐕"');
+      // Raw codepoint fallbacks should not appear for known MDI icons
+      expect(tree).not.toContain('icon-u+f0156');
+      expect(tree).not.toContain('icon-u+f0415');
     });
 
     it('should deduplicate nested cursor-pointer elements, preferring titled ancestors', async () => {

@@ -18,6 +18,7 @@
  */
 
 import type { Page, Frame, Locator } from 'playwright-core';
+import { MDI_CODEPOINT_NAMES } from './mdi-codepoints.js';
 
 export interface RefMap {
   [ref: string]: {
@@ -170,6 +171,10 @@ function slugifyLabel(value: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+function resolveIconName(codepoint: number): string | null {
+  return MDI_CODEPOINT_NAMES[codepoint] ?? null;
+}
+
 function getIconCodepoints(value: string): string[] {
   return Array.from(value)
     .filter((char) => isPrivateUseGlyph(char))
@@ -181,8 +186,23 @@ function getIconCodepoints(value: string): string[] {
 }
 
 function formatIconFallbackLabel(value: string): string {
-  const codepoints = getIconCodepoints(value);
-  if (codepoints.length === 0) return '<icon-u+unknown>';
+  const chars = Array.from(value).filter((char) => isPrivateUseGlyph(char));
+  if (chars.length === 0) return '<icon-u+unknown>';
+
+  // Try MDI lookup for the first icon codepoint
+  const code = chars[0].codePointAt(0);
+  if (code !== undefined) {
+    const name = resolveIconName(code);
+    if (name) return `<${name}>`;
+  }
+
+  // Fallback to raw codepoint
+  const codepoints = chars
+    .map((char) => {
+      const cp = char.codePointAt(0);
+      return cp === undefined ? '' : `u+${cp.toString(16)}`;
+    })
+    .filter((cp) => cp.length > 0);
   return `<icon-${codepoints.join('-')}>`;
 }
 
@@ -221,356 +241,374 @@ async function findCursorInteractiveElements(
 > {
   const rootSelector = selector || 'body';
 
+  // Pass MDI map as a plain object for icon name resolution inside the browser context
+  const mdiMap: Record<number, string> = MDI_CODEPOINT_NAMES;
+
   try {
-    return await page.evaluate((rootSel) => {
-      interface Candidate {
-        element: any;
-        selector: string;
-        text: string;
-        displayText: string;
-        tagName: string;
-        hasOnClick: boolean;
-        hasCursorPointer: boolean;
-        hasTabIndex: boolean;
-        hasTitle: boolean;
-        hasAriaLabel: boolean;
-        hasDirectCursorPointer: boolean;
-        depth: number;
-        order: number;
-      }
-
-      const interactiveRoles = new Set([
-        'button',
-        'link',
-        'textbox',
-        'checkbox',
-        'radio',
-        'combobox',
-        'listbox',
-        'menuitem',
-        'menuitemcheckbox',
-        'menuitemradio',
-        'option',
-        'searchbox',
-        'slider',
-        'spinbutton',
-        'switch',
-        'tab',
-        'treeitem',
-      ]);
-
-      const interactiveTags = new Set([
-        'a',
-        'button',
-        'input',
-        'select',
-        'textarea',
-        'details',
-        'summary',
-      ]);
-
-      const doc = (globalThis as any).document as any;
-      const getComputedStyle = (globalThis as any).getComputedStyle as (el: any) => any;
-      const cssApi = (globalThis as any).CSS as { escape?: (value: string) => string } | undefined;
-      const escapeCss = (value: string): string =>
-        cssApi?.escape ? cssApi.escape(value) : value.replace(/["\\]/g, '\\$&');
-
-      const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
-      const privateUseGlyphRe = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u;
-      const privateUseGlyphGlobalRe = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
-      const leadingPrivateUseGlyphsRe =
-        /^[\s\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]+/u;
-      const genericSemanticTokens = new Set([
-        'component',
-        'icon',
-        'icons',
-        'icon-parent',
-        'icon-container',
-        'container',
-        'parent',
-        'circle',
-        'button',
-        'btn',
-        'sidebar',
-        'sidebar-chip',
-        'chip',
-        'item',
-        'content',
-        'wrapper',
-        'root',
-        'reverb',
-        'threads',
-        'messages',
-        'margin',
-      ]);
-
-      const slugify = (value: string): string =>
-        value
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-+|-+$/g, '');
-
-      const isIconOnlyText = (value: string): boolean => {
-        if (!privateUseGlyphRe.test(value)) return false;
-        const withoutIcons = value.replace(privateUseGlyphGlobalRe, '').trim();
-        return withoutIcons.length === 0;
-      };
-
-      const stripLeadingIconGlyphs = (value: string): string =>
-        value.replace(leadingPrivateUseGlyphsRe, '').trim();
-
-      const formatIconFallbackLabel = (value: string): string => {
-        const codes = Array.from(value)
-          .filter((char) => privateUseGlyphRe.test(char))
-          .map((char) => {
-            const code = char.codePointAt(0);
-            return code === undefined ? '' : `u+${code.toString(16)}`;
-          })
-          .filter((code) => code.length > 0);
-        if (codes.length === 0) return '<icon-u+unknown>';
-        return `<icon-${codes.join('-')}>`;
-      };
-
-      const formatSemanticIconLabel = (value: string): string | null => {
-        const slug = slugify(value);
-        if (!slug) return null;
-        return `<${slug}>`;
-      };
-
-      const extractMeaningfulToken = (value: string): string | null => {
-        const parts = value
-          .split(/[^a-z0-9]+/i)
-          .map((part) => part.trim().toLowerCase())
-          .filter((part) => part.length > 0);
-        for (const part of parts) {
-          if (part.length < 2) continue;
-          if (/^\d+$/.test(part)) continue;
-          if (genericSemanticTokens.has(part)) continue;
-          return part;
+    return await page.evaluate(
+      ({ rootSel, mdiNames }) => {
+        interface Candidate {
+          element: any;
+          selector: string;
+          text: string;
+          displayText: string;
+          tagName: string;
+          hasOnClick: boolean;
+          hasCursorPointer: boolean;
+          hasTabIndex: boolean;
+          hasTitle: boolean;
+          hasAriaLabel: boolean;
+          hasDirectCursorPointer: boolean;
+          depth: number;
+          order: number;
         }
-        return null;
-      };
 
-      const inferSemanticName = (el: any): string | null => {
-        let current: any = el;
-        for (let depth = 0; current && depth < 5; depth += 1) {
-          const attrs = ['title', 'aria-label', 'data-label'];
-          for (const attr of attrs) {
-            const raw = normalizeText(current.getAttribute(attr) || '');
-            if (!raw) continue;
-            if (isIconOnlyText(raw)) continue;
-            const stripped = stripLeadingIconGlyphs(raw);
-            if (!stripped) continue;
-            return stripped;
+        const interactiveRoles = new Set([
+          'button',
+          'link',
+          'textbox',
+          'checkbox',
+          'radio',
+          'combobox',
+          'listbox',
+          'menuitem',
+          'menuitemcheckbox',
+          'menuitemradio',
+          'option',
+          'searchbox',
+          'slider',
+          'spinbutton',
+          'switch',
+          'tab',
+          'treeitem',
+        ]);
+
+        const interactiveTags = new Set([
+          'a',
+          'button',
+          'input',
+          'select',
+          'textarea',
+          'details',
+          'summary',
+        ]);
+
+        const doc = (globalThis as any).document as any;
+        const getComputedStyle = (globalThis as any).getComputedStyle as (el: any) => any;
+        const cssApi = (globalThis as any).CSS as
+          | { escape?: (value: string) => string }
+          | undefined;
+        const escapeCss = (value: string): string =>
+          cssApi?.escape ? cssApi.escape(value) : value.replace(/["\\]/g, '\\$&');
+
+        const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
+        const privateUseGlyphRe = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u;
+        const privateUseGlyphGlobalRe = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
+        const leadingPrivateUseGlyphsRe =
+          /^[\s\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]+/u;
+        const genericSemanticTokens = new Set([
+          'component',
+          'icon',
+          'icons',
+          'icon-parent',
+          'icon-container',
+          'container',
+          'parent',
+          'circle',
+          'button',
+          'btn',
+          'sidebar',
+          'sidebar-chip',
+          'chip',
+          'item',
+          'content',
+          'wrapper',
+          'root',
+          'reverb',
+          'threads',
+          'messages',
+          'margin',
+        ]);
+
+        const slugify = (value: string): string =>
+          value
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+
+        const isIconOnlyText = (value: string): boolean => {
+          if (!privateUseGlyphRe.test(value)) return false;
+          const withoutIcons = value.replace(privateUseGlyphGlobalRe, '').trim();
+          return withoutIcons.length === 0;
+        };
+
+        const stripLeadingIconGlyphs = (value: string): string =>
+          value.replace(leadingPrivateUseGlyphsRe, '').trim();
+
+        const formatIconFallbackLabel = (value: string): string => {
+          const chars = Array.from(value).filter((char) => privateUseGlyphRe.test(char));
+          if (chars.length === 0) return '<icon-u+unknown>';
+
+          // Try MDI lookup for the first icon codepoint
+          const code = chars[0].codePointAt(0);
+          if (code !== undefined && mdiNames[code]) {
+            return `<${mdiNames[code]}>`;
           }
 
-          const idToken = extractMeaningfulToken(current.id || '');
-          if (idToken) return idToken;
+          // Fallback to raw codepoint
+          const codes = chars
+            .map((char) => {
+              const cp = char.codePointAt(0);
+              return cp === undefined ? '' : `u+${cp.toString(16)}`;
+            })
+            .filter((cp) => cp.length > 0);
+          return `<icon-${codes.join('-')}>`;
+        };
 
-          const classTokens = Array.from(current.classList ?? []) as string[];
-          for (const token of classTokens) {
-            const meaningful = extractMeaningfulToken(token);
-            if (meaningful) return meaningful;
+        const formatSemanticIconLabel = (value: string): string | null => {
+          const slug = slugify(value);
+          if (!slug) return null;
+          return `<${slug}>`;
+        };
+
+        const extractMeaningfulToken = (value: string): string | null => {
+          const parts = value
+            .split(/[^a-z0-9]+/i)
+            .map((part) => part.trim().toLowerCase())
+            .filter((part) => part.length > 0);
+          for (const part of parts) {
+            if (part.length < 2) continue;
+            if (/^\d+$/.test(part)) continue;
+            if (genericSemanticTokens.has(part)) continue;
+            return part;
           }
+          return null;
+        };
 
-          current = current.parentElement;
-        }
-        return null;
-      };
-
-      const getVisibleText = (el: any): string => {
-        if (!el || typeof el.innerText !== 'string') return '';
-        const innerText = normalizeText(el.innerText);
-        return innerText;
-      };
-
-      const getBestText = (el: any): string => {
-        const title = normalizeText(el.getAttribute('title') || '');
-        if (title) return title;
-
-        const ariaLabel = normalizeText(el.getAttribute('aria-label') || '');
-        if (ariaLabel) return ariaLabel;
-
-        const visibleText = getVisibleText(el);
-        if (visibleText) return visibleText;
-
-        return normalizeText(el.textContent || '');
-      };
-
-      const getDisplayText = (el: any, rawText: string): string => {
-        if (!rawText) return rawText;
-
-        if (isIconOnlyText(rawText)) {
-          const semantic = inferSemanticName(el);
-          if (semantic) {
-            const semanticLabel = formatSemanticIconLabel(semantic);
-            if (semanticLabel) return semanticLabel;
-          }
-          return formatIconFallbackLabel(rawText);
-        }
-
-        const stripped = stripLeadingIconGlyphs(rawText);
-        if (stripped) return stripped;
-        return rawText;
-      };
-
-      const getDepth = (el: any): number => {
-        let depth = 0;
-        let current: any = el;
-        while (current?.parentElement) {
-          depth += 1;
-          current = current.parentElement;
-        }
-        return depth;
-      };
-
-      const buildSelector = (el: any): string => {
-        const testId = el.getAttribute('data-testid');
-        if (testId) return `[data-testid=${JSON.stringify(testId)}]`;
-        if (el.id) return `#${escapeCss(el.id)}`;
-
-        const path: string[] = [];
-        let current: any = el;
-        while (current && current !== doc.body) {
-          let segment = current.tagName.toLowerCase();
-          const classNames = (Array.from(current.classList ?? []) as string[]).filter(
-            (className) => className.trim().length > 0
-          );
-          const firstClass = classNames[0];
-          if (firstClass) segment += `.${escapeCss(firstClass)}`;
-
-          const parent = current.parentElement;
-          if (parent) {
-            const sameTagSiblings = (Array.from(parent.children ?? []) as any[]).filter(
-              (sib) => sib.tagName === current.tagName
-            );
-            if (sameTagSiblings.length > 1) {
-              const idx = sameTagSiblings.indexOf(current) + 1;
-              segment += `:nth-of-type(${idx})`;
+        const inferSemanticName = (el: any): string | null => {
+          let current: any = el;
+          for (let depth = 0; current && depth < 5; depth += 1) {
+            const attrs = ['title', 'aria-label', 'data-label'];
+            for (const attr of attrs) {
+              const raw = normalizeText(current.getAttribute(attr) || '');
+              if (!raw) continue;
+              if (isIconOnlyText(raw)) continue;
+              const stripped = stripLeadingIconGlyphs(raw);
+              if (!stripped) continue;
+              return stripped;
             }
+
+            const idToken = extractMeaningfulToken(current.id || '');
+            if (idToken) return idToken;
+
+            const classTokens = Array.from(current.classList ?? []) as string[];
+            for (const token of classTokens) {
+              const meaningful = extractMeaningfulToken(token);
+              if (meaningful) return meaningful;
+            }
+
+            current = current.parentElement;
+          }
+          return null;
+        };
+
+        const getVisibleText = (el: any): string => {
+          if (!el || typeof el.innerText !== 'string') return '';
+          const innerText = normalizeText(el.innerText);
+          return innerText;
+        };
+
+        const getBestText = (el: any): string => {
+          const title = normalizeText(el.getAttribute('title') || '');
+          if (title) return title;
+
+          const ariaLabel = normalizeText(el.getAttribute('aria-label') || '');
+          if (ariaLabel) return ariaLabel;
+
+          const visibleText = getVisibleText(el);
+          if (visibleText) return visibleText;
+
+          return normalizeText(el.textContent || '');
+        };
+
+        const getDisplayText = (el: any, rawText: string): string => {
+          if (!rawText) return rawText;
+
+          if (isIconOnlyText(rawText)) {
+            const semantic = inferSemanticName(el);
+            if (semantic) {
+              const semanticLabel = formatSemanticIconLabel(semantic);
+              if (semanticLabel) return semanticLabel;
+            }
+            return formatIconFallbackLabel(rawText);
           }
 
-          path.unshift(segment);
-          current = current.parentElement;
+          const stripped = stripLeadingIconGlyphs(rawText);
+          if (stripped) return stripped;
+          return rawText;
+        };
 
-          if (path.length >= 6) break;
+        const getDepth = (el: any): number => {
+          let depth = 0;
+          let current: any = el;
+          while (current?.parentElement) {
+            depth += 1;
+            current = current.parentElement;
+          }
+          return depth;
+        };
+
+        const buildSelector = (el: any): string => {
+          const testId = el.getAttribute('data-testid');
+          if (testId) return `[data-testid=${JSON.stringify(testId)}]`;
+          if (el.id) return `#${escapeCss(el.id)}`;
+
+          const path: string[] = [];
+          let current: any = el;
+          while (current && current !== doc.body) {
+            let segment = current.tagName.toLowerCase();
+            const classNames = (Array.from(current.classList ?? []) as string[]).filter(
+              (className) => className.trim().length > 0
+            );
+            const firstClass = classNames[0];
+            if (firstClass) segment += `.${escapeCss(firstClass)}`;
+
+            const parent = current.parentElement;
+            if (parent) {
+              const sameTagSiblings = (Array.from(parent.children ?? []) as any[]).filter(
+                (sib) => sib.tagName === current.tagName
+              );
+              if (sameTagSiblings.length > 1) {
+                const idx = sameTagSiblings.indexOf(current) + 1;
+                segment += `:nth-of-type(${idx})`;
+              }
+            }
+
+            path.unshift(segment);
+            current = current.parentElement;
+
+            if (path.length >= 6) break;
+          }
+
+          if (path.length === 0) {
+            return el.tagName.toLowerCase();
+          }
+
+          return path.join(' > ');
+        };
+
+        const root = doc.querySelector(rootSel) ?? doc.body;
+        const allElements: any[] = [root, ...(Array.from(root.querySelectorAll('*')) as any[])];
+
+        const candidates: Candidate[] = [];
+        let order = 0;
+
+        for (const el of allElements) {
+          if (!el || el.nodeType !== 1) continue;
+
+          const tagName = el.tagName.toLowerCase();
+          if (interactiveTags.has(tagName)) continue;
+
+          const role = el.getAttribute('role');
+          if (role && interactiveRoles.has(role.toLowerCase())) continue;
+
+          const computedStyle = getComputedStyle(el);
+          const hasCursorPointer = computedStyle.cursor === 'pointer';
+          const hasDirectCursorPointer = el.style?.cursor === 'pointer';
+          const hasOnClick =
+            el.hasAttribute('onclick') || typeof (el as any).onclick === 'function';
+
+          const tabIndex = el.getAttribute('tabindex');
+          const hasTabIndex = tabIndex !== null && Number.parseInt(tabIndex, 10) >= 0;
+
+          if (!hasCursorPointer && !hasOnClick && !hasTabIndex) continue;
+
+          if (
+            computedStyle.display === 'none' ||
+            computedStyle.visibility === 'hidden' ||
+            computedStyle.opacity === '0'
+          ) {
+            continue;
+          }
+
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) continue;
+
+          const text = getBestText(el).slice(0, 100);
+          if (!text) continue;
+          const displayText = getDisplayText(el, text).slice(0, 100);
+          if (!displayText) continue;
+
+          const hasTitle = normalizeText(el.getAttribute('title') || '').length > 0;
+          const hasAriaLabel = normalizeText(el.getAttribute('aria-label') || '').length > 0;
+
+          candidates.push({
+            element: el,
+            selector: buildSelector(el),
+            text,
+            displayText,
+            tagName,
+            hasOnClick,
+            hasCursorPointer,
+            hasTabIndex,
+            hasTitle,
+            hasAriaLabel,
+            hasDirectCursorPointer,
+            depth: getDepth(el),
+            order: order++,
+          });
         }
 
-        if (path.length === 0) {
-          return el.tagName.toLowerCase();
-        }
+        const scoreCandidate = (candidate: Candidate): number => {
+          let score = 0;
+          if (candidate.hasTitle) score += 16;
+          else if (candidate.hasAriaLabel) score += 8;
+          if (candidate.hasDirectCursorPointer) score += 4;
+          if (candidate.hasOnClick) score += 2;
+          if (candidate.hasTabIndex) score += 1;
+          return score;
+        };
 
-        return path.join(' > ');
-      };
+        const sorted = [...candidates].sort((a, b) => {
+          const scoreDiff = scoreCandidate(b) - scoreCandidate(a);
+          if (scoreDiff !== 0) return scoreDiff;
 
-      const root = doc.querySelector(rootSel) ?? doc.body;
-      const allElements: any[] = [root, ...(Array.from(root.querySelectorAll('*')) as any[])];
+          const aLabeled = a.hasTitle || a.hasAriaLabel;
+          const bLabeled = b.hasTitle || b.hasAriaLabel;
+          if (aLabeled && bLabeled) {
+            if (a.depth !== b.depth) return a.depth - b.depth; // Prefer titled ancestors
+          } else if (a.depth !== b.depth) {
+            return b.depth - a.depth; // Prefer deepest unlabeled candidate
+          }
 
-      const candidates: Candidate[] = [];
-      let order = 0;
-
-      for (const el of allElements) {
-        if (!el || el.nodeType !== 1) continue;
-
-        const tagName = el.tagName.toLowerCase();
-        if (interactiveTags.has(tagName)) continue;
-
-        const role = el.getAttribute('role');
-        if (role && interactiveRoles.has(role.toLowerCase())) continue;
-
-        const computedStyle = getComputedStyle(el);
-        const hasCursorPointer = computedStyle.cursor === 'pointer';
-        const hasDirectCursorPointer = el.style?.cursor === 'pointer';
-        const hasOnClick = el.hasAttribute('onclick') || typeof (el as any).onclick === 'function';
-
-        const tabIndex = el.getAttribute('tabindex');
-        const hasTabIndex = tabIndex !== null && Number.parseInt(tabIndex, 10) >= 0;
-
-        if (!hasCursorPointer && !hasOnClick && !hasTabIndex) continue;
-
-        if (
-          computedStyle.display === 'none' ||
-          computedStyle.visibility === 'hidden' ||
-          computedStyle.opacity === '0'
-        ) {
-          continue;
-        }
-
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-
-        const text = getBestText(el).slice(0, 100);
-        if (!text) continue;
-        const displayText = getDisplayText(el, text).slice(0, 100);
-        if (!displayText) continue;
-
-        const hasTitle = normalizeText(el.getAttribute('title') || '').length > 0;
-        const hasAriaLabel = normalizeText(el.getAttribute('aria-label') || '').length > 0;
-
-        candidates.push({
-          element: el,
-          selector: buildSelector(el),
-          text,
-          displayText,
-          tagName,
-          hasOnClick,
-          hasCursorPointer,
-          hasTabIndex,
-          hasTitle,
-          hasAriaLabel,
-          hasDirectCursorPointer,
-          depth: getDepth(el),
-          order: order++,
+          return a.order - b.order;
         });
-      }
 
-      const scoreCandidate = (candidate: Candidate): number => {
-        let score = 0;
-        if (candidate.hasTitle) score += 16;
-        else if (candidate.hasAriaLabel) score += 8;
-        if (candidate.hasDirectCursorPointer) score += 4;
-        if (candidate.hasOnClick) score += 2;
-        if (candidate.hasTabIndex) score += 1;
-        return score;
-      };
-
-      const sorted = [...candidates].sort((a, b) => {
-        const scoreDiff = scoreCandidate(b) - scoreCandidate(a);
-        if (scoreDiff !== 0) return scoreDiff;
-
-        const aLabeled = a.hasTitle || a.hasAriaLabel;
-        const bLabeled = b.hasTitle || b.hasAriaLabel;
-        if (aLabeled && bLabeled) {
-          if (a.depth !== b.depth) return a.depth - b.depth; // Prefer titled ancestors
-        } else if (a.depth !== b.depth) {
-          return b.depth - a.depth; // Prefer deepest unlabeled candidate
+        const selected: Candidate[] = [];
+        for (const candidate of sorted) {
+          const overlaps = selected.some(
+            (chosen) =>
+              chosen.element.contains(candidate.element) ||
+              candidate.element.contains(chosen.element)
+          );
+          if (overlaps) continue;
+          selected.push(candidate);
         }
 
-        return a.order - b.order;
-      });
+        selected.sort((a, b) => a.order - b.order);
 
-      const selected: Candidate[] = [];
-      for (const candidate of sorted) {
-        const overlaps = selected.some(
-          (chosen) =>
-            chosen.element.contains(candidate.element) || candidate.element.contains(chosen.element)
-        );
-        if (overlaps) continue;
-        selected.push(candidate);
-      }
-
-      selected.sort((a, b) => a.order - b.order);
-
-      return selected.map((candidate) => ({
-        selector: candidate.selector,
-        text: candidate.text,
-        displayText: candidate.displayText,
-        tagName: candidate.tagName,
-        hasOnClick: candidate.hasOnClick,
-        hasCursorPointer: candidate.hasCursorPointer,
-        hasTabIndex: candidate.hasTabIndex,
-      }));
-    }, rootSelector);
+        return selected.map((candidate) => ({
+          selector: candidate.selector,
+          text: candidate.text,
+          displayText: candidate.displayText,
+          tagName: candidate.tagName,
+          hasOnClick: candidate.hasOnClick,
+          hasCursorPointer: candidate.hasCursorPointer,
+          hasTabIndex: candidate.hasTabIndex,
+        }));
+      },
+      { rootSel: rootSelector, mdiNames: mdiMap }
+    );
   } catch (error) {
     console.error('findCursorInteractiveElements failed:', error);
     return [];
