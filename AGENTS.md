@@ -4,6 +4,42 @@ Use this file as a scratch pad. Constantly update it after every interaction wit
 
 # Recent Interaction Log
 
+## 2026-02-09
+
+- Implemented icon-label normalization for Myhelo snapshot output in `src/snapshot.ts`:
+  - Added PUA icon detection (`U+E000..U+F8FF`, `U+F0000..U+FFFFD`, `U+100000..U+10FFFD`).
+  - Added display normalization for interactive labels:
+    - icon-only -> semantic `<...>` when inferred, else `<icon-u+...>`
+    - mixed icon+text -> strip leading icon glyphs (e.g., `󰋘 Projects` -> `Projects`)
+  - Applied normalization to both:
+    - cursor-interactive lines (`clickable ...`)
+    - ARIA interactive lines (`button ...`, etc.)
+  - Kept raw names in refs/selectors for stability (`refs[ref].name` and `buildSelector(role, rawName)` unchanged).
+- Added TDD coverage in `src/browser.test.ts`:
+  - `should normalize myhelo-style icon-only labels to angle-bracket names`
+  - Covers:
+    - semantic class token icon-only -> `clickable "<menu>"`
+    - unknown icon-only -> `clickable "<icon-u+f0156>"`
+    - mixed icon+text -> `clickable "Projects"`
+    - ARIA icon-only button -> `button "<icon-u+f0415>"`
+  - Includes negative assertions to ensure raw glyph labels are absent.
+- Confirmed red-state before fix:
+  - `pnpm vitest run src/browser.test.ts -t "normalize myhelo-style icon-only labels"` ❌
+  - Failure showed raw output (`clickable "󰇙"`, `button "󰐕"`, etc.) instead of `<...>`.
+- Post-fix verification commands and results:
+  - `pnpm vitest run src/browser.test.ts -t "normalize myhelo-style icon-only labels"` ✅
+  - `pnpm vitest run src/browser.test.ts -t "icon-only|styx-style nav buttons|cursor"` ✅
+  - `pnpm vitest run src/browser.test.ts -t "partition myhelo layout|skip sidebar and drawer sections"` ✅
+  - `pnpm build` ✅
+  - `agent-browser close` ✅
+  - `bash myhelo/workflows/chat.sh` ✅
+  - `agent-browser snapshot -i -C` ✅
+- Live Myhelo validation after fix:
+  - Top-level icon-only clickable now renders as `<icon-u+f0156>`.
+  - Sidebar menu icon now renders as `<menu>`.
+  - ARIA FAB icon button now renders as `<icon-u+f0415>`.
+  - Mixed sidebar labels now render readable text without leading icon glyphs (`Projects`, `Files`, etc.).
+
 ## 2026-02-08
 
 - Restarted daemon after latest build to ensure new snapshot logic is active:

@@ -571,6 +571,32 @@ describe('BrowserManager', () => {
       expect(clickables.length).toBe(2);
     });
 
+    it('should normalize myhelo-style icon-only labels to angle-bracket names', async () => {
+      const page = browser.getPage();
+      await page.setContent(`
+        <html>
+          <body>
+            <div id="menu-btn" class="component menu" style="cursor: pointer;">&#xF01D9;</div>
+            <div style="cursor: pointer;">&#xF0156;</div>
+            <div id="mixed-btn" style="cursor: pointer;">&#xF02D8; Projects</div>
+            <button id="aria-icon-btn">&#xF0415;</button>
+          </body>
+        </html>
+      `);
+
+      const { tree } = await browser.getSnapshot({ interactive: true, cursor: true });
+
+      expect(tree).toContain('clickable "<menu>"');
+      expect(tree).toContain('clickable "<icon-u+f0156>"');
+      expect(tree).toContain('clickable "Projects"');
+      expect(tree).toContain('button "<icon-u+f0415>"');
+
+      expect(tree).not.toContain('clickable "󰇙"');
+      expect(tree).not.toContain('clickable "󰅖"');
+      expect(tree).not.toContain('clickable "󰋘 Projects"');
+      expect(tree).not.toContain('button "󰐕"');
+    });
+
     it('should deduplicate nested cursor-pointer elements, preferring titled ancestors', async () => {
       const page = browser.getPage();
       await page.setContent(`

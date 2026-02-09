@@ -133,6 +133,11 @@ const STRUCTURAL_ROLES = new Set([
   'none',
 ]);
 
+const PRIVATE_USE_GLYPH_RE = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u;
+const PRIVATE_USE_GLYPH_GLOBAL_RE = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
+const LEADING_PRIVATE_USE_GLYPHS_RE =
+  /^[\s\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]+/u;
+
 /**
  * Build a selector string for storing in ref map
  */
@@ -142,6 +147,58 @@ function buildSelector(role: string, name?: string): string {
     return `getByRole('${role}', { name: "${escapedName}", exact: true })`;
   }
   return `getByRole('${role}')`;
+}
+
+function isPrivateUseGlyph(char: string): boolean {
+  return PRIVATE_USE_GLYPH_RE.test(char);
+}
+
+function isIconOnlyText(value: string): boolean {
+  if (!PRIVATE_USE_GLYPH_RE.test(value)) return false;
+  const withoutIcons = value.replace(PRIVATE_USE_GLYPH_GLOBAL_RE, '').trim();
+  return withoutIcons.length === 0;
+}
+
+function stripLeadingIconGlyphs(value: string): string {
+  return value.replace(LEADING_PRIVATE_USE_GLYPHS_RE, '').trim();
+}
+
+function slugifyLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function getIconCodepoints(value: string): string[] {
+  return Array.from(value)
+    .filter((char) => isPrivateUseGlyph(char))
+    .map((char) => {
+      const code = char.codePointAt(0);
+      return code === undefined ? '' : `u+${code.toString(16)}`;
+    })
+    .filter((code) => code.length > 0);
+}
+
+function formatIconFallbackLabel(value: string): string {
+  const codepoints = getIconCodepoints(value);
+  if (codepoints.length === 0) return '<icon-u+unknown>';
+  return `<icon-${codepoints.join('-')}>`;
+}
+
+function formatSemanticIconLabel(value: string): string | null {
+  const slug = slugifyLabel(value);
+  if (!slug) return null;
+  return `<${slug}>`;
+}
+
+function normalizeInteractiveNameForDisplay(name?: string): string | undefined {
+  if (!name) return name;
+  if (isIconOnlyText(name)) {
+    return formatIconFallbackLabel(name);
+  }
+  const stripped = stripLeadingIconGlyphs(name);
+  return stripped || name;
 }
 
 /**
@@ -155,6 +212,7 @@ async function findCursorInteractiveElements(
   Array<{
     selector: string;
     text: string;
+    displayText: string;
     tagName: string;
     hasOnClick: boolean;
     hasCursorPointer: boolean;
@@ -169,6 +227,7 @@ async function findCursorInteractiveElements(
         element: any;
         selector: string;
         text: string;
+        displayText: string;
         tagName: string;
         hasOnClick: boolean;
         hasCursorPointer: boolean;
@@ -217,6 +276,107 @@ async function findCursorInteractiveElements(
         cssApi?.escape ? cssApi.escape(value) : value.replace(/["\\]/g, '\\$&');
 
       const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
+      const privateUseGlyphRe = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u;
+      const privateUseGlyphGlobalRe = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
+      const leadingPrivateUseGlyphsRe =
+        /^[\s\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]+/u;
+      const genericSemanticTokens = new Set([
+        'component',
+        'icon',
+        'icons',
+        'icon-parent',
+        'icon-container',
+        'container',
+        'parent',
+        'circle',
+        'button',
+        'btn',
+        'sidebar',
+        'sidebar-chip',
+        'chip',
+        'item',
+        'content',
+        'wrapper',
+        'root',
+        'reverb',
+        'threads',
+        'messages',
+        'margin',
+      ]);
+
+      const slugify = (value: string): string =>
+        value
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+
+      const isIconOnlyText = (value: string): boolean => {
+        if (!privateUseGlyphRe.test(value)) return false;
+        const withoutIcons = value.replace(privateUseGlyphGlobalRe, '').trim();
+        return withoutIcons.length === 0;
+      };
+
+      const stripLeadingIconGlyphs = (value: string): string =>
+        value.replace(leadingPrivateUseGlyphsRe, '').trim();
+
+      const formatIconFallbackLabel = (value: string): string => {
+        const codes = Array.from(value)
+          .filter((char) => privateUseGlyphRe.test(char))
+          .map((char) => {
+            const code = char.codePointAt(0);
+            return code === undefined ? '' : `u+${code.toString(16)}`;
+          })
+          .filter((code) => code.length > 0);
+        if (codes.length === 0) return '<icon-u+unknown>';
+        return `<icon-${codes.join('-')}>`;
+      };
+
+      const formatSemanticIconLabel = (value: string): string | null => {
+        const slug = slugify(value);
+        if (!slug) return null;
+        return `<${slug}>`;
+      };
+
+      const extractMeaningfulToken = (value: string): string | null => {
+        const parts = value
+          .split(/[^a-z0-9]+/i)
+          .map((part) => part.trim().toLowerCase())
+          .filter((part) => part.length > 0);
+        for (const part of parts) {
+          if (part.length < 2) continue;
+          if (/^\d+$/.test(part)) continue;
+          if (genericSemanticTokens.has(part)) continue;
+          return part;
+        }
+        return null;
+      };
+
+      const inferSemanticName = (el: any): string | null => {
+        let current: any = el;
+        for (let depth = 0; current && depth < 5; depth += 1) {
+          const attrs = ['title', 'aria-label', 'data-label'];
+          for (const attr of attrs) {
+            const raw = normalizeText(current.getAttribute(attr) || '');
+            if (!raw) continue;
+            if (isIconOnlyText(raw)) continue;
+            const stripped = stripLeadingIconGlyphs(raw);
+            if (!stripped) continue;
+            return stripped;
+          }
+
+          const idToken = extractMeaningfulToken(current.id || '');
+          if (idToken) return idToken;
+
+          const classTokens = Array.from(current.classList ?? []) as string[];
+          for (const token of classTokens) {
+            const meaningful = extractMeaningfulToken(token);
+            if (meaningful) return meaningful;
+          }
+
+          current = current.parentElement;
+        }
+        return null;
+      };
 
       const getVisibleText = (el: any): string => {
         if (!el || typeof el.innerText !== 'string') return '';
@@ -235,6 +395,23 @@ async function findCursorInteractiveElements(
         if (visibleText) return visibleText;
 
         return normalizeText(el.textContent || '');
+      };
+
+      const getDisplayText = (el: any, rawText: string): string => {
+        if (!rawText) return rawText;
+
+        if (isIconOnlyText(rawText)) {
+          const semantic = inferSemanticName(el);
+          if (semantic) {
+            const semanticLabel = formatSemanticIconLabel(semantic);
+            if (semanticLabel) return semanticLabel;
+          }
+          return formatIconFallbackLabel(rawText);
+        }
+
+        const stripped = stripLeadingIconGlyphs(rawText);
+        if (stripped) return stripped;
+        return rawText;
       };
 
       const getDepth = (el: any): number => {
@@ -324,6 +501,8 @@ async function findCursorInteractiveElements(
 
         const text = getBestText(el).slice(0, 100);
         if (!text) continue;
+        const displayText = getDisplayText(el, text).slice(0, 100);
+        if (!displayText) continue;
 
         const hasTitle = normalizeText(el.getAttribute('title') || '').length > 0;
         const hasAriaLabel = normalizeText(el.getAttribute('aria-label') || '').length > 0;
@@ -332,6 +511,7 @@ async function findCursorInteractiveElements(
           element: el,
           selector: buildSelector(el),
           text,
+          displayText,
           tagName,
           hasOnClick,
           hasCursorPointer,
@@ -384,6 +564,7 @@ async function findCursorInteractiveElements(
       return selected.map((candidate) => ({
         selector: candidate.selector,
         text: candidate.text,
+        displayText: candidate.displayText,
         tagName: candidate.tagName,
         hasOnClick: candidate.hasOnClick,
         hasCursorPointer: candidate.hasCursorPointer,
@@ -733,7 +914,7 @@ async function getEnhancedSnapshotForScope(
       if (el.hasOnClick) hints.push('onclick');
       if (el.hasTabIndex) hints.push('tabindex');
 
-      additionalLines.push(`- ${role} "${el.text}" [ref=${ref}] [${hints.join(', ')}]`);
+      additionalLines.push(`- ${role} "${el.displayText}" [ref=${ref}] [${hints.join(', ')}]`);
     }
 
     if (additionalLines.length > 0) {
@@ -903,8 +1084,9 @@ function processAriaTree(
           nth, // Always store nth, we'll use it for duplicates
         };
 
+        const displayName = normalizeInteractiveNameForDisplay(name);
         let enhanced = `- ${role}`;
-        if (name) enhanced += ` "${name}"`;
+        if (displayName) enhanced += ` "${displayName}"`;
         enhanced += ` [ref=${ref}]`;
         // Only show nth in output if it's > 0 (for readability)
         if (nth > 0) enhanced += ` [nth=${nth}]`;
@@ -1035,9 +1217,11 @@ function processLine(
       nth, // Always store nth, we'll clean up non-duplicates later
     };
 
+    const displayName = isInteractive ? normalizeInteractiveNameForDisplay(name) : name;
+
     // Build enhanced line with ref
     let enhanced = `${prefix}${role}`;
-    if (name) enhanced += ` "${name}"`;
+    if (displayName) enhanced += ` "${displayName}"`;
     enhanced += ` [ref=${ref}]`;
     // Only show nth in output if it's > 0 (for readability)
     if (nth > 0) enhanced += ` [nth=${nth}]`;
