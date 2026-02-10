@@ -218,7 +218,31 @@ function normalizeInteractiveNameForDisplay(name?: string): string | undefined {
     return formatIconFallbackLabel(name);
   }
   const stripped = stripLeadingIconGlyphs(name);
-  return stripped || name;
+  return replacePrivateUseGlyphsWithLabels(stripped || name);
+}
+
+function normalizeNonInteractiveNameForDisplay(name?: string): string | undefined {
+  if (!name) return name;
+  return replacePrivateUseGlyphsWithLabels(name);
+}
+
+function formatIconCodepointLabel(codepoint: number): string {
+  const name = resolveIconName(codepoint);
+  if (name) return `<${name}>`;
+  return `<icon-u+${codepoint.toString(16)}>`;
+}
+
+function replacePrivateUseGlyphsWithLabels(value: string): string {
+  if (!PRIVATE_USE_GLYPH_RE.test(value)) return value;
+
+  return Array.from(value)
+    .map((char) => {
+      if (!isPrivateUseGlyph(char)) return char;
+      const code = char.codePointAt(0);
+      if (code === undefined) return char;
+      return formatIconCodepointLabel(code);
+    })
+    .join('');
 }
 
 /**
@@ -1123,12 +1147,13 @@ function processAriaTree(
         };
 
         const displayName = normalizeInteractiveNameForDisplay(name);
+        const displaySuffix = replacePrivateUseGlyphsWithLabels(suffix ?? '');
         let enhanced = `- ${role}`;
         if (displayName) enhanced += ` "${displayName}"`;
         enhanced += ` [ref=${ref}]`;
         // Only show nth in output if it's > 0 (for readability)
         if (nth > 0) enhanced += ` [nth=${nth}]`;
-        if (suffix && suffix.includes('[')) enhanced += suffix;
+        if (displaySuffix && displaySuffix.includes('[')) enhanced += displaySuffix;
 
         result.push(enhanced);
       }
@@ -1215,7 +1240,7 @@ function processLine(
       // In interactive mode, only keep metadata under interactive elements
       return null;
     }
-    return line;
+    return replacePrivateUseGlyphsWithLabels(line);
   }
 
   const [, prefix, role, name, suffix] = match;
@@ -1255,7 +1280,10 @@ function processLine(
       nth, // Always store nth, we'll clean up non-duplicates later
     };
 
-    const displayName = isInteractive ? normalizeInteractiveNameForDisplay(name) : name;
+    const displayName = isInteractive
+      ? normalizeInteractiveNameForDisplay(name)
+      : normalizeNonInteractiveNameForDisplay(name);
+    const displaySuffix = replacePrivateUseGlyphsWithLabels(suffix ?? '');
 
     // Build enhanced line with ref
     let enhanced = `${prefix}${role}`;
@@ -1263,9 +1291,21 @@ function processLine(
     enhanced += ` [ref=${ref}]`;
     // Only show nth in output if it's > 0 (for readability)
     if (nth > 0) enhanced += ` [nth=${nth}]`;
-    if (suffix) enhanced += suffix;
+    if (displaySuffix) enhanced += displaySuffix;
 
     return enhanced;
+  }
+
+  const displayName = isInteractive
+    ? normalizeInteractiveNameForDisplay(name)
+    : normalizeNonInteractiveNameForDisplay(name);
+  const displaySuffix = replacePrivateUseGlyphsWithLabels(suffix ?? '');
+
+  if (displayName !== name || displaySuffix !== (suffix ?? '')) {
+    let normalized = `${prefix}${role}`;
+    if (displayName) normalized += ` "${displayName}"`;
+    if (displaySuffix) normalized += displaySuffix;
+    return normalized;
   }
 
   return line;

@@ -600,6 +600,29 @@ describe('BrowserManager', () => {
       expect(tree).not.toContain('icon-u+f0415');
     });
 
+    it('should resolve myhelo glyphs in non-interactive snapshot text lines', async () => {
+      const page = browser.getPage();
+      await page.setContent(`
+        <html>
+          <body>
+            <div>&#xF0156;</div>
+            <div>&#xF024B; Files</div>
+            <div>Assigned &#xF028C; to me</div>
+          </body>
+        </html>
+      `);
+
+      const { tree } = await browser.getSnapshot();
+
+      expect(tree).toContain('<close>');
+      expect(tree).toContain('<folder> Files');
+      expect(tree).toContain('Assigned <forum> to me');
+
+      expect(tree).not.toContain('󰇙');
+      expect(tree).not.toContain('󰉋 Files');
+      expect(tree).not.toContain('Assigned 󰊌 to me');
+    });
+
     it('should deduplicate nested cursor-pointer elements, preferring titled ancestors', async () => {
       const page = browser.getPage();
       await page.setContent(`
