@@ -566,7 +566,7 @@ describe('BrowserManager', () => {
       expect(clickables.length).toBe(2);
     });
 
-    it('should normalize myhelo-style icon-only labels to angle-bracket names', async () => {
+    it('should preserve myhelo glyph labels and append icon description metadata', async () => {
       const page = browser.getPage();
       await page.setContent(`
         <html>
@@ -581,23 +581,21 @@ describe('BrowserManager', () => {
 
       const { tree } = await browser.getSnapshot({ interactive: true, cursor: true });
 
-      // Semantic class inference still wins for "menu" class
-      expect(tree).toContain('clickable "<menu>"');
-      // MDI codepoint resolved to icon name (U+F0156 = close)
-      expect(tree).toContain('clickable "<close>"');
-      // Mixed icon+text: leading icon stripped, text preserved
-      expect(tree).toContain('clickable "Projects"');
-      // MDI codepoint resolved to icon name (U+F0415 = plus)
-      expect(tree).toContain('button "<plus>"');
+      // Raw glyph text remains visible for direct text-based interaction
+      expect(tree).toContain('clickable "󰇙"');
+      expect(tree).toContain('clickable "󰅖"');
+      expect(tree).toContain('clickable "󰋘 Projects"');
+      expect(tree).toContain('button "󰐕"');
 
-      // Raw PUA glyphs should never appear
-      expect(tree).not.toContain('clickable "󰇙"');
-      expect(tree).not.toContain('clickable "󰅖"');
-      expect(tree).not.toContain('clickable "󰋘 Projects"');
-      expect(tree).not.toContain('button "󰐕"');
-      // Raw codepoint fallbacks should not appear for known MDI icons
-      expect(tree).not.toContain('icon-u+f0156');
-      expect(tree).not.toContain('icon-u+f0415');
+      // Icon mappings are emitted as explicit metadata
+      expect(tree).toContain('[icon-desc=<dots-vertical>]');
+      expect(tree).toContain('[icon-desc=<close>]');
+      expect(tree).toContain('[icon-desc=<hexagon>]');
+      expect(tree).toContain('[icon-desc=<plus>]');
+
+      // Description metadata should not replace the actual displayed text
+      expect(tree).not.toContain('clickable "<close>"');
+      expect(tree).not.toContain('button "<plus>"');
     });
 
     it('should resolve myhelo glyphs in non-interactive snapshot text lines', async () => {
@@ -614,13 +612,10 @@ describe('BrowserManager', () => {
 
       const { tree } = await browser.getSnapshot();
 
-      expect(tree).toContain('<close>');
-      expect(tree).toContain('<folder> Files');
-      expect(tree).toContain('Assigned <forum> to me');
-
-      expect(tree).not.toContain('󰇙');
-      expect(tree).not.toContain('󰉋 Files');
-      expect(tree).not.toContain('Assigned 󰊌 to me');
+      expect(tree).toContain('󰅖');
+      expect(tree).toContain('󰉋 Files');
+      expect(tree).toContain('Assigned 󰊌 to me');
+      expect(tree).toContain('[icon-descs=<close>, <folder>, <forum>]');
     });
 
     it('should deduplicate nested cursor-pointer elements, preferring titled ancestors', async () => {

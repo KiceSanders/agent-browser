@@ -213,36 +213,55 @@ function formatSemanticIconLabel(value: string): string | null {
 }
 
 function normalizeInteractiveNameForDisplay(name?: string): string | undefined {
-  if (!name) return name;
-  if (isIconOnlyText(name)) {
-    return formatIconFallbackLabel(name);
-  }
-  const stripped = stripLeadingIconGlyphs(name);
-  return replacePrivateUseGlyphsWithLabels(stripped || name);
+  return name;
 }
 
 function normalizeNonInteractiveNameForDisplay(name?: string): string | undefined {
-  if (!name) return name;
-  return replacePrivateUseGlyphsWithLabels(name);
+  return name;
 }
 
-function formatIconCodepointLabel(codepoint: number): string {
+function getIconDescriptor(codepoint: number): string {
   const name = resolveIconName(codepoint);
-  if (name) return `<${name}>`;
-  return `<icon-u+${codepoint.toString(16)}>`;
+  if (name) return name;
+  return `icon-u+${codepoint.toString(16)}`;
 }
 
-function replacePrivateUseGlyphsWithLabels(value: string): string {
-  if (!PRIVATE_USE_GLYPH_RE.test(value)) return value;
+function collectIconDescriptors(value: string): string[] {
+  if (!PRIVATE_USE_GLYPH_RE.test(value)) return [];
 
+  const seen = new Set<string>();
   return Array.from(value)
+    .filter((char) => isPrivateUseGlyph(char))
     .map((char) => {
-      if (!isPrivateUseGlyph(char)) return char;
       const code = char.codePointAt(0);
-      if (code === undefined) return char;
-      return formatIconCodepointLabel(code);
+      if (code === undefined) return '';
+      return getIconDescriptor(code);
     })
-    .join('');
+    .filter((descriptor) => descriptor.length > 0)
+    .filter((descriptor) => {
+      if (seen.has(descriptor)) return false;
+      seen.add(descriptor);
+      return true;
+    });
+}
+
+function buildIconDescriptionMetadata(...parts: Array<string | undefined>): string {
+  const joined = parts.filter((part) => part && part.length > 0).join(' ');
+  if (!joined) return '';
+
+  const descriptors = collectIconDescriptors(joined);
+  if (descriptors.length === 0) return '';
+
+  const key = descriptors.length === 1 ? 'icon-desc' : 'icon-descs';
+  const rendered = descriptors.map((descriptor) => `<${descriptor}>`).join(', ');
+  return ` [${key}=${rendered}]`;
+}
+
+function appendIconDescriptionMetadata(line: string, ...parts: Array<string | undefined>): string {
+  if (line.includes('[icon-desc=')) return line;
+  if (line.includes('[icon-descs=')) return line;
+  const metadata = buildIconDescriptionMetadata(...parts);
+  return metadata ? `${line}${metadata}` : line;
 }
 
 /**
@@ -976,7 +995,9 @@ async function getEnhancedSnapshotForScope(
       if (el.hasOnClick) hints.push('onclick');
       if (el.hasTabIndex) hints.push('tabindex');
 
-      additionalLines.push(`- ${role} "${el.displayText}" [ref=${ref}] [${hints.join(', ')}]`);
+      const hintsSegment = hints.length > 0 ? ` [${hints.join(', ')}]` : '';
+      const iconMetadata = buildIconDescriptionMetadata(el.text);
+      additionalLines.push(`- ${role} "${el.text}" [ref=${ref}]${hintsSegment}${iconMetadata}`);
     }
 
     if (additionalLines.length > 0) {
@@ -1147,13 +1168,14 @@ function processAriaTree(
         };
 
         const displayName = normalizeInteractiveNameForDisplay(name);
-        const displaySuffix = replacePrivateUseGlyphsWithLabels(suffix ?? '');
+        const displaySuffix = suffix ?? '';
         let enhanced = `- ${role}`;
         if (displayName) enhanced += ` "${displayName}"`;
         enhanced += ` [ref=${ref}]`;
         // Only show nth in output if it's > 0 (for readability)
         if (nth > 0) enhanced += ` [nth=${nth}]`;
         if (displaySuffix && displaySuffix.includes('[')) enhanced += displaySuffix;
+        enhanced = appendIconDescriptionMetadata(enhanced, name, suffix);
 
         result.push(enhanced);
       }
@@ -1240,7 +1262,7 @@ function processLine(
       // In interactive mode, only keep metadata under interactive elements
       return null;
     }
-    return replacePrivateUseGlyphsWithLabels(line);
+    return appendIconDescriptionMetadata(line, line);
   }
 
   const [, prefix, role, name, suffix] = match;
@@ -1283,7 +1305,7 @@ function processLine(
     const displayName = isInteractive
       ? normalizeInteractiveNameForDisplay(name)
       : normalizeNonInteractiveNameForDisplay(name);
-    const displaySuffix = replacePrivateUseGlyphsWithLabels(suffix ?? '');
+    const displaySuffix = suffix ?? '';
 
     // Build enhanced line with ref
     let enhanced = `${prefix}${role}`;
@@ -1293,22 +1315,10 @@ function processLine(
     if (nth > 0) enhanced += ` [nth=${nth}]`;
     if (displaySuffix) enhanced += displaySuffix;
 
-    return enhanced;
+    return appendIconDescriptionMetadata(enhanced, name, suffix);
   }
 
-  const displayName = isInteractive
-    ? normalizeInteractiveNameForDisplay(name)
-    : normalizeNonInteractiveNameForDisplay(name);
-  const displaySuffix = replacePrivateUseGlyphsWithLabels(suffix ?? '');
-
-  if (displayName !== name || displaySuffix !== (suffix ?? '')) {
-    let normalized = `${prefix}${role}`;
-    if (displayName) normalized += ` "${displayName}"`;
-    if (displaySuffix) normalized += displaySuffix;
-    return normalized;
-  }
-
-  return line;
+  return appendIconDescriptionMetadata(line, name, suffix);
 }
 
 /**
